@@ -254,6 +254,29 @@ def _ensure_device_table(dev_eui: str) -> str:
     return table
 
 
+def _remove_device_from_db(dev_eui: str):
+    """Drop the device's event table and remove all its rows from support tables."""
+    try:
+        table = _device_tables.pop(dev_eui, None)
+        if table is None:
+            rows = _db_execute(
+                "SELECT table_name FROM device_table_map WHERE dev_eui = %s",
+                (dev_eui,), fetch=True,
+            )
+            table = rows[0][0] if rows else None
+
+        if table:
+            _db_execute(f"DROP TABLE IF EXISTS {table}")
+            print(f"Dropped device table: {table}")
+
+        _db_execute("DELETE FROM device_table_map WHERE dev_eui = %s", (dev_eui,))
+        _db_execute("DELETE FROM device_stats   WHERE dev_eui = %s", (dev_eui,))
+        _db_execute("DELETE FROM device_types   WHERE dev_eui = %s", (dev_eui,))
+        _device_type_store.pop(dev_eui, None)
+    except Exception as exc:
+        print(f"DB remove_device error [{dev_eui}]: {exc}", file=sys.stderr)
+
+
 # ── Device type store ─────────────────────────────────────────────────────────
 _device_type_store: dict[str, str] = {}   # EUI (upper) → device type string
 
@@ -613,11 +636,15 @@ def device_status_refresh():
                 _device_registry.extend(by_eui.values())
 
             for eui in added:
+                _ensure_device_table(eui)   # create DB table immediately
                 threading.Thread(
                     target=device_poller_thread, args=(eui,),
                     daemon=True, name=f"poll-{eui}"
                 ).start()
                 print(f"Device added: {eui}")
+
+            for eui in removed:
+                _remove_device_from_db(eui)
 
             if removed:
                 _persist_stats()
