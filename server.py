@@ -107,7 +107,23 @@ DIR      = os.path.dirname(os.path.abspath(__file__))
 LOGS_DIR = os.path.join(DIR, "logs")
 PORT     = 8765
 
-DB_DSN = os.environ.get("DATABASE_URL", "postgresql://doorsense:doorsense@localhost/doorsense")
+def _load_dotenv():
+    """Load .env file from project directory into os.environ if present."""
+    env_path = os.path.join(DIR, ".env")
+    if not os.path.isfile(env_path):
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                os.environ.setdefault(k.strip(), v.strip())
+
+_load_dotenv()
+
+DB_DSN = os.environ.get("DATABASE_URL")
+if not DB_DSN:
+    sys.exit("ERROR: DATABASE_URL environment variable is not set. Copy .env.example to .env and fill in your credentials.")
 
 
 def _device_log_path(name: str, eui: str) -> str:
