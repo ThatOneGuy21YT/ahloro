@@ -157,21 +157,12 @@ def _db_execute(sql: str, params=None, fetch: bool = False):
 def _init_db():
     """Create database tables if they don't exist."""
     _db_execute("""
-        CREATE TABLE IF NOT EXISTS sensor_events (
-            id          BIGSERIAL PRIMARY KEY,
-            dev_eui     TEXT NOT NULL,
-            device_type TEXT NOT NULL,
-            timestamp   DOUBLE PRECISION NOT NULL,
-            value       INTEGER,
-            raw_value   DOUBLE PRECISION,
-            unit        TEXT,
-            extra       JSONB
+        CREATE TABLE IF NOT EXISTS device_table_map (
+            dev_eui     TEXT PRIMARY KEY,
+            table_name  TEXT NOT NULL,
+            device_name TEXT
         )
     """)
-    _db_execute(
-        "CREATE INDEX IF NOT EXISTS idx_sensor_events_eui_ts "
-        "ON sensor_events (dev_eui, timestamp DESC)"
-    )
     _db_execute("""
         CREATE TABLE IF NOT EXISTS device_stats (
             dev_eui        TEXT PRIMARY KEY,
@@ -200,6 +191,67 @@ def _init_db():
         )
     """)
     print("Database schema ready.")
+
+
+# ── Per-device table management ───────────────────────────────────────────────
+
+_device_tables: dict[str, str] = {}   # EUI → table name cache
+
+
+def _table_name_for_device(name: str, eui: str) -> str:
+    """Derive a safe PostgreSQL table name from a device name."""
+    safe = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+    if not safe or safe[0].isdigit():
+        safe = f"dev_{safe}"
+    base = safe[:50] or "device"
+    # Append last-4 of EUI if name is already used by another device
+    if base in _device_tables.values():
+        base = f"{base[:45]}_{eui[-4:].lower()}"
+    return base
+
+
+def _ensure_device_table(dev_eui: str) -> str:
+    """Return the table name for a device, creating it in PostgreSQL if needed."""
+    table = _device_tables.get(dev_eui)
+    if table:
+        return table
+
+    # Check the persistent mapping first (handles restarts)
+    rows = _db_execute(
+        "SELECT table_name FROM device_table_map WHERE dev_eui = %s",
+        (dev_eui,), fetch=True,
+    )
+    if rows:
+        _device_tables[dev_eui] = rows[0][0]
+        return rows[0][0]
+
+    # New device — derive a table name and create the table
+    name  = _get_device_name(dev_eui)
+    table = _table_name_for_device(name, dev_eui)
+
+    _db_execute(f"""
+        CREATE TABLE IF NOT EXISTS {table} (
+            id          BIGSERIAL PRIMARY KEY,
+            recorded_at TIMESTAMPTZ NOT NULL,
+            device_type TEXT NOT NULL,
+            value       INTEGER,
+            raw_value   DOUBLE PRECISION,
+            unit        TEXT,
+            extra       JSONB
+        )
+    """)
+    _db_execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{table}_ts ON {table} (recorded_at DESC)"
+    )
+    _db_execute(
+        "INSERT INTO device_table_map (dev_eui, table_name, device_name) "
+        "VALUES (%s, %s, %s) ON CONFLICT (dev_eui) DO NOTHING",
+        (dev_eui, table, name),
+    )
+    print(f"Created device table: {table} for {dev_eui}")
+
+    _device_tables[dev_eui] = table
+    return table
 
 
 # ── Device type store ─────────────────────────────────────────────────────────
@@ -282,16 +334,15 @@ def broadcast(event: dict):
 # ── Event log persistence (PostgreSQL) ───────────────────────────────────────
 
 def _db_insert_event(event: dict):
-    """Persist one decoded sensor event to the database."""
+    """Persist one decoded sensor event into the device's own table."""
     try:
+        table = _ensure_device_table(event["devEUI"])
         _db_execute(
-            """INSERT INTO sensor_events
-                   (dev_eui, device_type, timestamp, value, raw_value, unit, extra)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            f"INSERT INTO {table} (recorded_at, device_type, value, raw_value, unit, extra)"
+            " VALUES (to_timestamp(%s), %s, %s, %s, %s, %s)",
             (
-                event.get("devEUI"),
-                event.get("device_type"),
                 event.get("timestamp"),
+                event.get("device_type"),
                 event.get("value"),
                 event.get("raw_value"),
                 event.get("unit"),
@@ -303,40 +354,52 @@ def _db_insert_event(event: dict):
 
 
 def _load_events_from_db():
-    """Populate device history deques from the last 1000 events per device."""
+    """Populate device history deques from each device's table (last 1000 rows each)."""
     try:
-        rows = _db_execute(
-            """SELECT dev_eui, device_type, timestamp, value, raw_value, unit, extra
-               FROM (
-                   SELECT *,
-                          ROW_NUMBER() OVER (PARTITION BY dev_eui ORDER BY timestamp DESC) AS rn
-                   FROM sensor_events
-               ) t
-               WHERE rn <= 1000
-               ORDER BY timestamp ASC""",
-            fetch=True,
+        map_rows = _db_execute(
+            "SELECT dev_eui, table_name FROM device_table_map", fetch=True
         )
     except Exception as exc:
         print(f"DB load_events error: {exc}", file=sys.stderr)
         return
 
-    events_by_eui: dict[str, list] = {}
-    for dev_eui, device_type, timestamp, value, raw_value, unit, extra in (rows or []):
-        ev: dict = {"devEUI": dev_eui, "device_type": device_type, "timestamp": timestamp}
-        if value     is not None: ev["value"]     = value
-        if raw_value is not None: ev["raw_value"] = raw_value
-        if unit      is not None: ev["unit"]      = unit
-        if extra     is not None: ev["extra"]     = extra
-        events_by_eui.setdefault(dev_eui, []).append(ev)
+    total = 0
+    for dev_eui, table in (map_rows or []):
+        _device_tables[dev_eui] = table   # warm the cache
+        try:
+            event_rows = _db_execute(
+                f"""SELECT device_type,
+                           extract(epoch from recorded_at),
+                           value, raw_value, unit, extra
+                    FROM (
+                        SELECT *, ROW_NUMBER() OVER (ORDER BY recorded_at DESC) AS rn
+                        FROM {table}
+                    ) t
+                    WHERE rn <= 1000
+                    ORDER BY recorded_at ASC""",
+                fetch=True,
+            )
+        except Exception as exc:
+            print(f"DB load_events error for {table}: {exc}", file=sys.stderr)
+            continue
 
-    for eui, events in events_by_eui.items():
-        if eui not in _device_states:
-            _device_states[eui] = _new_device_state()
-        with _device_states[eui]["history_lock"]:
-            _device_states[eui]["history"].extend(events)
+        if dev_eui not in _device_states:
+            _device_states[dev_eui] = _new_device_state()
 
-    total = sum(len(v) for v in events_by_eui.values())
-    print(f"Loaded {total} events from DB for {len(events_by_eui)} device(s)")
+        events = []
+        for device_type, timestamp, value, raw_value, unit, extra in (event_rows or []):
+            ev: dict = {"devEUI": dev_eui, "device_type": device_type, "timestamp": timestamp}
+            if value     is not None: ev["value"]     = value
+            if raw_value is not None: ev["raw_value"] = raw_value
+            if unit      is not None: ev["unit"]      = unit
+            if extra     is not None: ev["extra"]     = extra
+            events.append(ev)
+
+        with _device_states[dev_eui]["history_lock"]:
+            _device_states[dev_eui]["history"].extend(events)
+        total += len(events)
+
+    print(f"Loaded {total} events from DB for {len(map_rows or [])} device(s)")
 
 
 # ── Statistics persistence (PostgreSQL) ──────────────────────────────────────
