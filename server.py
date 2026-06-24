@@ -62,12 +62,12 @@ def _json_dumps(obj) -> str:
 
 
 # ── Gateway / siot credentials ────────────────────────────────────────────────
-GW_HOST  = "10.8.8.8"
+GW_HOST  = "https://zoloft-james-journalists-pound.trycloudflare.com"
 GW_BASE  = f"https://{GW_HOST}/api"
 GW_EMAIL = "admin"
 GW_PASS  = "p0ssw0rd;"
 
-SIOT_BASE = f"http://{GW_HOST}:8080/api/v2"
+SIOT_BASE = f"http://https://zoloft-james-journalists-pound.trycloudflare.com/api/v2"
 SIOT_USER = "siot"
 SIOT_PASS = "dfrobot"
 
