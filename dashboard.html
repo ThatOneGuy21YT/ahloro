@@ -1,0 +1,2920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920, initial-scale=0.5625">
+  <title>LoRaWAN Dashboard</title>
+  <style>
+    /* ── Material You M3 colour tokens (seed: #006874 teal) ─────────────────*/
+    :root {
+      color-scheme: light dark;
+      --md-primary:             #006874;
+      --md-on-primary:          #ffffff;
+      --md-primary-container:   #97f0ff;
+      --md-on-primary-container:#001f24;
+      --md-secondary-container: #cde7ec;
+      --md-on-secondary-container:#051f23;
+      --md-error:               #ba1a1a;
+      --md-error-container:     #ffdad6;
+      --md-on-error-container:  #410002;
+      --md-bg:                  #fafdfd;
+      --md-on-bg:               #191c1d;
+      --md-surface:             #fafdfd;
+      --md-on-surface:          #191c1d;
+      --md-surface-variant:     #dbe4e6;
+      --md-on-surface-variant:  #3f484a;
+      --md-outline:             #6f797a;
+      --md-outline-variant:     #bfc8ca;
+      --md-surf-low:            #f4f7f8;
+      --md-surf:                #eef1f1;
+      --md-surf-high:           #e8ebeb;
+
+      --c-open:            #ba1a1a;
+      --c-open-container:  #ffdad6;
+      --c-closed:          #006874;
+      --c-closed-container:#97f0ff;
+      --c-held:            #7a4000;
+      --c-held-container:  #ffdcbb;
+      --c-double:          #5b0085;
+      --c-double-container:#f2d3ff;
+
+      --radius-xl: 28px;
+      --radius-l:  20px;
+      --radius-m:  16px;
+      --radius-s:  12px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --md-primary:             #4fd8eb;
+        --md-on-primary:          #00363d;
+        --md-primary-container:   #004f57;
+        --md-on-primary-container:#97f0ff;
+        --md-secondary-container: #334b4f;
+        --md-on-secondary-container:#cde7ec;
+        --md-error:               #ffb4ab;
+        --md-error-container:     #93000a;
+        --md-on-error-container:  #ffdad6;
+        --md-bg:                  #191c1d;
+        --md-on-bg:               #e1e3e3;
+        --md-surface:             #191c1d;
+        --md-on-surface:          #e1e3e3;
+        --md-surface-variant:     #3f484a;
+        --md-on-surface-variant:  #bfc8ca;
+        --md-outline:             #899294;
+        --md-outline-variant:     #3f484a;
+        --md-surf-low:            #191c1d;
+        --md-surf:                #1d2021;
+        --md-surf-high:           #272b2b;
+        --c-open:            #ffb4ab;
+        --c-open-container:  #93000a;
+        --c-closed:          #4fd8eb;
+        --c-closed-container:#004f57;
+        --c-held:            #ffb77a;
+        --c-held-container:  #5a2e00;
+        --c-double:          #e0a8ff;
+        --c-double-container:#3b006a;
+      }
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Google Sans', 'Roboto', system-ui, -apple-system, sans-serif;
+      background: var(--md-bg);
+      color: var(--md-on-bg);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── App bar ─────────────────────────────────────────────────────────── */
+    .app-bar {
+      height: 64px;
+      background: var(--md-surf);
+      border-bottom: 1px solid var(--md-outline-variant);
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 200;
+    }
+    .app-bar-logo {
+      width: 40px; height: 40px;
+      background: var(--md-primary-container);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--md-on-primary-container);
+      flex-shrink: 0;
+    }
+    .app-bar-title {
+      font-size: 22px; font-weight: 400;
+      color: var(--md-on-surface);
+      flex-shrink: 0;
+    }
+
+    /* ── Devices dropdown ────────────────────────────────────────────────── */
+    .devices-menu-wrap {
+      position: relative;
+      flex-shrink: 0;
+    }
+    .devices-btn {
+      display: flex; align-items: center; gap: 8px;
+      background: var(--md-primary-container);
+      color: var(--md-on-primary-container);
+      border: none; border-radius: 20px;
+      padding: 8px 14px 8px 16px;
+      font-size: 14px; font-weight: 500; font-family: inherit;
+      cursor: pointer;
+      transition: filter .15s;
+      white-space: nowrap;
+    }
+    .devices-btn:hover { filter: brightness(.92); }
+    .devices-btn .chevron {
+      transition: transform .2s;
+    }
+    .devices-btn.open .chevron { transform: rotate(180deg); }
+
+    .devices-dropdown {
+      display: none;
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      min-width: 280px;
+      background: var(--md-surface);
+      border: 1px solid var(--md-outline-variant);
+      border-radius: var(--radius-m);
+      box-shadow: 0 4px 24px rgba(0,0,0,.18);
+      overflow: hidden;
+      z-index: 500;
+    }
+    .devices-dropdown.open { display: block; }
+
+    .device-option {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px;
+      cursor: pointer;
+      transition: background .12s;
+      border-bottom: 1px solid var(--md-outline-variant);
+    }
+    .device-option:last-child { border-bottom: none; }
+    .device-option:hover { background: var(--md-surf-high); }
+    .device-option.selected { background: color-mix(in srgb, var(--md-primary) 12%, transparent); }
+
+    .dev-status-dot {
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+    }
+    .dev-status-dot.online  { background: #4caf50; }
+    .dev-status-dot.offline { background: var(--md-outline); }
+
+    .dev-info { flex: 1; min-width: 0; }
+    .dev-name {
+      font-size: 14px; font-weight: 500;
+      color: var(--md-on-surface);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .dev-meta {
+      font-size: 11px; color: var(--md-on-surface-variant);
+      margin-top: 2px;
+    }
+    .dev-battery {
+      display: flex; align-items: center; gap: 4px;
+      font-size: 12px; font-weight: 500;
+      color: var(--md-on-surface-variant);
+      flex-shrink: 0;
+    }
+    .dev-battery svg { flex-shrink: 0; }
+
+    /* ── Spacer ──────────────────────────────────────────────────────────── */
+    .app-bar-spacer { flex: 1; }
+
+    /* ── Add Device button ───────────────────────────────────────────────── */
+    .add-device-btn {
+      display: flex; align-items: center; gap: 8px;
+      background: var(--md-primary);
+      color: var(--md-on-primary);
+      border: none; border-radius: 20px;
+      padding: 8px 18px;
+      font-size: 14px; font-weight: 500;
+      cursor: pointer;
+      transition: filter .15s, box-shadow .15s;
+      white-space: nowrap;
+    }
+    .add-device-btn:hover  { filter: brightness(1.1); box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+    .add-device-btn:active { filter: brightness(.9); }
+
+    /* ── Delete device button ───────────────────────────────────────────── */
+    .delete-device-btn {
+      display: flex; align-items: center; justify-content: center;
+      width: 36px; height: 36px; flex-shrink: 0;
+      background: none;
+      border: 1.5px solid var(--md-outline-variant);
+      border-radius: 50%;
+      color: var(--md-error);
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+    .delete-device-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--md-error) 10%, transparent); border-color: var(--md-error); }
+    .delete-device-btn:disabled { opacity: .35; cursor: default; }
+
+    /* ── Danger (delete) action button ──────────────────────────────────── */
+    .btn-danger { background: var(--md-error); color: #fff; border: none; border-radius: 20px; padding: 8px 20px; font-size: 14px; font-weight: 500; font-family: inherit; cursor: pointer; transition: filter .15s; }
+    .btn-danger:hover    { filter: brightness(1.1); }
+    .btn-danger:disabled { opacity: .5; cursor: default; }
+
+    /* ── Connection pill ─────────────────────────────────────────────────── */
+    .conn-pill {
+      display: flex; align-items: center; gap: 8px;
+      background: var(--md-surf-high);
+      border-radius: 20px;
+      padding: 6px 14px;
+      font-size: 13px;
+      color: var(--md-on-surface-variant);
+      flex-shrink: 0;
+    }
+    .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--md-outline); transition: background .3s; }
+    .conn-dot.connected  { background: #4caf50; }
+    .conn-dot.error      { background: var(--md-error); }
+    .conn-dot.connecting { background: #ff9800; }
+
+    /* ── App-bar subtitle ────────────────────────────────────────────────── */
+    .app-bar-subtitle { font-size: 13px; color: var(--md-on-surface-variant); white-space: nowrap; }
+
+    /* ── Scale slider ────────────────────────────────────────────────────── */
+    .scale-control {
+      display: flex; align-items: center; gap: 10px;
+      color: var(--md-on-surface-variant);
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+    .scale-label { min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; }
+    #scale-slider {
+      -webkit-appearance: none; appearance: none;
+      width: 130px; height: 4px;
+      border-radius: 2px;
+      background: var(--md-outline-variant);
+      outline: none; cursor: pointer;
+    }
+    #scale-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 20px; height: 20px; border-radius: 50%;
+      background: var(--md-primary);
+      box-shadow: 0 1px 4px rgba(0,0,0,.25);
+      cursor: pointer;
+    }
+    #scale-slider::-moz-range-thumb {
+      width: 20px; height: 20px; border-radius: 50%;
+      background: var(--md-primary); border: none;
+      box-shadow: 0 1px 4px rgba(0,0,0,.25);
+      cursor: pointer;
+    }
+
+    /* ── Widget grid ─────────────────────────────────────────────────────── */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(24, 60px);
+      grid-auto-rows: 60px;
+      gap: 16px;
+      padding: 24px;
+    }
+
+    /* ── Widget shell ────────────────────────────────────────────────────── */
+    .widget {
+      background: var(--md-surf);
+      border-radius: var(--radius-xl);
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+      cursor: grab;
+      transition: box-shadow .2s, opacity .2s, transform .15s;
+      will-change: transform;
+    }
+    .widget:active { cursor: grabbing; }
+    .widget.dragging  { opacity: .55; transform: scale(.97); box-shadow: 0 12px 40px rgba(0,0,0,.22); z-index: 300; }
+
+    .drag-handle {
+      position: absolute; top: 16px; right: 16px;
+      color: var(--md-outline); opacity: 0; transition: opacity .2s; pointer-events: none;
+    }
+    .widget:hover .drag-handle { opacity: 1; }
+
+    .resize-handle {
+      position: absolute; bottom: 8px; right: 8px;
+      width: 22px; height: 22px; cursor: se-resize;
+      opacity: 0; transition: opacity .2s;
+      color: var(--md-outline);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 10;
+    }
+    .widget:hover .resize-handle { opacity: 1; }
+    .widget.is-resizing { transition: none !important; user-select: none; }
+
+    .widget-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .widget-icon {
+      width: 40px; height: 40px;
+      border-radius: var(--radius-s);
+      background: var(--md-secondary-container);
+      color: var(--md-on-secondary-container);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .widget-title    { font-size: 16px; font-weight: 500; }
+    .widget-subtitle { font-size: 12px; color: var(--md-on-surface-variant); margin-top: 2px; }
+
+    /* ── Drop ghost ──────────────────────────────────────────────────────── */
+    #drop-ghost {
+      display: none;
+      background: color-mix(in srgb, var(--md-primary) 12%, transparent);
+      border: 2px dashed var(--md-primary);
+      border-radius: var(--radius-xl);
+      pointer-events: none;
+      z-index: 50;
+    }
+    #drop-ghost.invalid { background: color-mix(in srgb, var(--md-error) 12%, transparent); border-color: var(--md-error); }
+
+    /* ── Status widget ───────────────────────────────────────────────────── */
+    .status-body { display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100% - 72px); gap: 20px; }
+    .status-ring { width: 140px; height: 140px; border-radius: 50%; display: flex; align-items: center; justify-content: center; position: relative; transition: background .4s, box-shadow .4s; }
+    .status-ring.open   { background: var(--c-open-container); box-shadow: 0 0 0 0 var(--c-open); animation: pulse-open 2.2s ease-in-out infinite; }
+    .status-ring.closed { background: var(--c-closed-container); box-shadow: none; }
+    .status-ring.idle   { background: var(--md-surf-high); }
+    .status-ring.held   { background: var(--c-held-container); box-shadow: 0 0 0 0 var(--c-held); animation: pulse-held 2.2s ease-in-out infinite; }
+    .status-ring.double { background: var(--c-double-container); box-shadow: 0 0 0 0 var(--c-double); animation: pulse-double 2.2s ease-in-out infinite; }
+
+    @keyframes pulse-open {
+      0%,100% { box-shadow: 0 0 0 0px  color-mix(in srgb, var(--c-open) 40%, transparent); }
+      50%      { box-shadow: 0 0 0 18px color-mix(in srgb, var(--c-open)  0%, transparent); }
+    }
+    @keyframes pulse-held {
+      0%,100% { box-shadow: 0 0 0 0px  color-mix(in srgb, var(--c-held) 40%, transparent); }
+      50%      { box-shadow: 0 0 0 18px color-mix(in srgb, var(--c-held)  0%, transparent); }
+    }
+    @keyframes pulse-double {
+      0%,100% { box-shadow: 0 0 0 0px  color-mix(in srgb, var(--c-double) 40%, transparent); }
+      50%      { box-shadow: 0 0 0 18px color-mix(in srgb, var(--c-double)  0%, transparent); }
+    }
+
+    .status-icon { width: 72px; height: 72px; transition: color .4s; }
+    .status-ring .status-icon { object-fit: contain; }
+    .status-text { font-size: 40px; font-weight: 700; letter-spacing: -.5px; transition: color .4s; }
+    .status-text.open   { color: var(--c-open); }
+    .status-text.closed { color: var(--c-closed); }
+    .status-text.held   { color: var(--c-held); }
+    .status-text.double { color: var(--c-double); }
+    .status-text.idle   { color: var(--md-outline); }
+    .status-since { font-size: 14px; font-weight: 500; color: var(--md-on-surface-variant); font-variant-numeric: tabular-nums; }
+
+    /* ── Stats widget ────────────────────────────────────────────────────── */
+    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; height: calc(100% - 72px); }
+    .stat-tile {
+      background: var(--md-surf-high);
+      border-radius: var(--radius-m);
+      padding: 16px 14px;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .stat-val { font-size: 30px; font-weight: 700; color: var(--md-primary); font-variant-numeric: tabular-nums; line-height: 1; }
+    .stat-lbl { font-size: 11px; font-weight: 500; color: var(--md-on-surface-variant); text-transform: uppercase; letter-spacing: .5px; margin-top: 4px; }
+    .stat-tile.accent-open   .stat-val { color: var(--c-open); }
+    .stat-tile.accent-closed .stat-val { color: var(--c-closed); }
+
+    /* ── Chart widget ────────────────────────────────────────────────────── */
+    .chart-wrap { height: calc(100% - 72px); display: flex; flex-direction: column; gap: 10px; }
+    .chart-canvas { flex: 1; width: 100%; border-radius: var(--radius-s); display: block; min-height: 0; }
+    .chart-legend { display: flex; gap: 20px; }
+    .legend-item  { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--md-on-surface-variant); }
+    .legend-pip   { width: 10px; height: 10px; border-radius: 50%; }
+
+    /* ── Log widget ──────────────────────────────────────────────────────── */
+    .log-wrap { height: calc(100% - 72px); overflow-y: auto; border-radius: var(--radius-m); background: var(--md-surf-low); padding: 6px; }
+    .log-wrap::-webkit-scrollbar       { width: 4px; }
+    .log-wrap::-webkit-scrollbar-track { background: transparent; }
+    .log-wrap::-webkit-scrollbar-thumb { background: var(--md-outline-variant); border-radius: 2px; }
+    .log-row { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; animation: slide-in .18s ease-out; transition: background .15s; }
+    .log-row:hover { background: var(--md-surf); }
+    @keyframes slide-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+    .log-pip        { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+    .log-pip.open   { background: var(--c-open); }
+    .log-pip.closed { background: var(--c-closed); }
+    .log-pip.held   { background: var(--c-held); }
+    .log-pip.double { background: var(--c-double); }
+    .log-state      { font-size: 13px; font-weight: 600; min-width: 72px; }
+    .log-state.open   { color: var(--c-open); }
+    .log-state.closed { color: var(--c-closed); }
+    .log-state.held   { color: var(--c-held); }
+    .log-state.double { color: var(--c-double); }
+    .log-time { font-size: 12px; color: var(--md-on-surface-variant); font-variant-numeric: tabular-nums; }
+    .log-dur  { font-size: 12px; color: var(--md-outline); margin-left: 4px; }
+    .log-raw  { margin-left: auto; font-size: 11px; color: var(--md-outline); font-family: 'Roboto Mono', monospace; }
+    .log-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 10px; color: var(--md-outline); font-size: 14px; }
+    .log-empty svg { opacity: .35; }
+
+    .export-btn {
+      margin-left: auto;
+      display: flex; align-items: center; gap: 6px;
+      background: var(--md-primary-container);
+      color: var(--md-on-primary-container);
+      border: none; border-radius: 20px;
+      padding: 8px 16px;
+      font-size: 13px; font-weight: 500;
+      cursor: pointer; transition: filter .15s;
+    }
+    .export-btn:hover  { filter: brightness(.92); }
+    .export-btn:active { filter: brightness(.84); }
+
+    /* ── Add Device dialog ───────────────────────────────────────────────── */
+    #add-device-dialog {
+      border: none; border-radius: var(--radius-xl);
+      background: var(--md-surface); color: var(--md-on-surface);
+      padding: 0; width: 520px; max-width: calc(100vw - 48px);
+      box-shadow: 0 8px 40px rgba(0,0,0,.28);
+    }
+    #add-device-dialog::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2px); }
+    .dialog-inner { padding: 28px; }
+    .dialog-title { font-size: 20px; font-weight: 500; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; }
+    .dialog-close { background: none; border: none; cursor: pointer; color: var(--md-on-surface-variant); border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; transition: background .15s; }
+    .dialog-close:hover { background: var(--md-surf-high); }
+    .field-group { display: flex; flex-direction: column; gap: 16px; margin-bottom: 8px; }
+    .field-row   { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .field       { display: flex; flex-direction: column; gap: 6px; }
+    .field label { font-size: 12px; font-weight: 500; color: var(--md-on-surface-variant); text-transform: uppercase; letter-spacing: .4px; }
+    .field label .required { color: var(--md-error); margin-left: 2px; }
+    .field input, .field select { background: var(--md-surf-high); border: 1.5px solid var(--md-outline-variant); border-radius: var(--radius-s); color: var(--md-on-surface); font-size: 14px; font-family: inherit; padding: 10px 12px; outline: none; transition: border-color .15s; }
+    .field input:focus, .field select:focus { border-color: var(--md-primary); }
+    .field input.hex { font-family: 'Roboto Mono', monospace; letter-spacing: .5px; text-transform: uppercase; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--md-outline-variant); }
+    .btn-cancel { background: none; border: 1.5px solid var(--md-outline-variant); border-radius: 20px; padding: 8px 20px; font-size: 14px; font-weight: 500; font-family: inherit; color: var(--md-on-surface-variant); cursor: pointer; transition: background .15s; }
+    .btn-cancel:hover { background: var(--md-surf-high); }
+    .btn-submit { background: var(--md-primary); color: var(--md-on-primary); border: none; border-radius: 20px; padding: 8px 24px; font-size: 14px; font-weight: 500; font-family: inherit; cursor: pointer; transition: filter .15s; display: flex; align-items: center; gap: 8px; }
+    .btn-submit:hover    { filter: brightness(1.1); }
+    .btn-submit:disabled { opacity: .5; cursor: default; }
+    .dialog-hint { margin-top: 14px; font-size: 12px; color: var(--md-on-surface-variant); line-height: 1.5; }
+    .dialog-msg { margin-top: 12px; padding: 10px 14px; border-radius: var(--radius-s); font-size: 13px; display: none; }
+    .dialog-msg.success { background: var(--c-closed-container); color: var(--c-closed); display: block; }
+    .dialog-msg.error   { background: var(--md-error-container); color: var(--md-on-error-container); display: block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: spin .6s linear infinite; flex-shrink: 0; }
+
+    /* ── Tilt config button (app bar) ────────────────────────────────────── */
+    .tilt-cfg-btn {
+      flex-shrink: 0; display: flex; align-items: center; gap: 6px;
+      background: none; border: 1.5px solid var(--md-outline-variant);
+      border-radius: 20px; padding: 6px 14px;
+      font-size: 13px; font-weight: 500; font-family: inherit;
+      color: var(--md-on-surface-variant); cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+    .tilt-cfg-btn:hover { background: var(--md-surf-high); border-color: var(--md-outline); }
+
+    /* ── Tilt byte config dialog ─────────────────────────────────────────── */
+    #tilt-config-dialog {
+      border: none; border-radius: var(--radius-xl);
+      background: var(--md-surface); color: var(--md-on-surface);
+      padding: 0; width: 400px; max-width: calc(100vw - 48px);
+      box-shadow: 0 8px 40px rgba(0,0,0,.28);
+    }
+    #tilt-config-dialog::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2px); }
+    .tilt-axis-row {
+      display: flex; align-items: center; gap: 16px;
+    }
+    .tilt-axis-row .gyro-axis-label { font-size: 20px; width: 24px; flex-shrink: 0; }
+    .tilt-axis-row .field { flex: 0 0 120px; }
+    .tilt-axis-row .field input { width: 100%; }
+    .tilt-bytes-preview {
+      font-size: 13px; font-family: 'Roboto Mono', monospace;
+      color: var(--md-primary); background: var(--md-primary-container);
+      border-radius: var(--radius-s); padding: 4px 10px; white-space: nowrap;
+    }
+
+    /* ── Type selector ──────────────────────────────────────────────────── */
+    .type-select-wrap {
+      flex-shrink: 0; display: flex; align-items: center; gap: 6px;
+    }
+    .type-select-label { font-size: 12px; font-weight: 500; color: var(--md-on-surface-variant); white-space: nowrap; }
+    .type-select {
+      background: var(--md-surf-high); border: 1.5px solid var(--md-outline-variant);
+      border-radius: 20px; color: var(--md-on-surface); font-size: 13px; font-family: inherit;
+      padding: 6px 12px; outline: none; cursor: pointer; transition: border-color .15s;
+      max-width: 170px;
+    }
+    .type-select:focus    { border-color: var(--md-primary); }
+    .type-select:disabled { opacity: .45; cursor: default; }
+
+    /* ── Status icon SVG (replaces <img>) ───────────────────────────────── */
+    .status-icon-svg {
+      width: 72px; height: 72px; display: flex; align-items: center; justify-content: center;
+      transition: color .4s;
+    }
+    .status-ring.open   .status-icon-svg { color: var(--c-open);    }
+    .status-ring.closed .status-icon-svg { color: var(--c-closed);  }
+    .status-ring.held   .status-icon-svg { color: var(--c-held);    }
+    .status-ring.double .status-icon-svg { color: var(--c-double);  }
+    .status-ring.idle   .status-icon-svg { color: var(--md-outline); }
+
+    /* ── Analog sensor status display ───────────────────────────────────── */
+    .analog-display { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+    .analog-value-row { display: flex; align-items: baseline; gap: 6px; }
+    .analog-value {
+      font-size: 64px; font-weight: 700; line-height: 1;
+      color: var(--md-primary); font-variant-numeric: tabular-nums;
+    }
+    .analog-unit { font-size: 24px; font-weight: 400; color: var(--md-on-surface-variant); }
+    .analog-extra-row { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+    .analog-extra-chip { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--md-on-surface-variant); }
+
+    /* ── Gyroscope / 3-axis display ──────────────────────────────────────── */
+    .gyro-display { display: flex; flex-direction: column; gap: 2px; }
+    .gyro-row { display: flex; align-items: baseline; gap: 10px; }
+    .gyro-axis-label { font-size: 13px; font-weight: 700; width: 18px; letter-spacing: 0.5px; }
+    .gyro-axis-x { color: #c0392b; }
+    .gyro-axis-y { color: #2471a3; }
+    .gyro-axis-z { color: #1e8449; }
+    @media (prefers-color-scheme: dark) {
+      .gyro-axis-x { color: #ff6b6b; }
+      .gyro-axis-y { color: #74b9ff; }
+      .gyro-axis-z { color: #55efc4; }
+    }
+    .gyro-val {
+      font-size: 48px; font-weight: 700; line-height: 1.05;
+      font-variant-numeric: tabular-nums; min-width: 130px; text-align: right;
+    }
+    .gyro-val-x { color: #c0392b; }
+    .gyro-val-y { color: #2471a3; }
+    .gyro-val-z { color: #1e8449; }
+    @media (prefers-color-scheme: dark) {
+      .gyro-val-x { color: #ff6b6b; }
+      .gyro-val-y { color: #74b9ff; }
+      .gyro-val-z { color: #55efc4; }
+    }
+    .gyro-unit { font-size: 16px; font-weight: 400; color: var(--md-on-surface-variant); }
+
+    /* ── No devices placeholder ──────────────────────────────────────────── */
+    #no-device-msg {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      height: calc(100vh - 64px);
+      gap: 16px; color: var(--md-outline); font-size: 16px;
+    }
+    #no-device-msg svg { opacity: .3; }
+  </style>
+</head>
+<body>
+
+<!-- ── App bar ── -->
+<header class="app-bar">
+  <div class="app-bar-logo">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3a4.237 4.237 0 0 0-6 0zm-4-4 2 2a7.074 7.074 0 0 1 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
+    </svg>
+  </div>
+  <div class="app-bar-title">LoRaWAN Dashboard</div>
+
+  <!-- Devices dropdown -->
+  <div class="devices-menu-wrap" id="devices-menu-wrap">
+    <button class="devices-btn" id="devices-btn" onclick="toggleDevicesMenu()">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/></svg>
+      Devices
+      <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
+    </button>
+    <div class="devices-dropdown" id="devices-dropdown">
+      <div class="device-option" style="color:var(--md-outline);font-size:13px;cursor:default">
+        <span>Loading devices…</span>
+      </div>
+    </div>
+  </div>
+
+  <button class="delete-device-btn" id="delete-device-btn" onclick="openDeleteDialog()" title="Remove selected device" disabled>
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+  </button>
+
+  <!-- Device type selector -->
+  <div class="type-select-wrap" id="type-select-wrap">
+    <span class="type-select-label">Type</span>
+    <select class="type-select" id="device-type-select" disabled onchange="onTypeSelectChange()">
+      <option value="">—</option>
+    </select>
+  </div>
+
+  <button class="tilt-cfg-btn" id="tilt-cfg-btn" onclick="openTiltConfigDialog()" title="Configure tilt sensor byte offsets" style="display:none">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
+    Byte Offsets
+  </button>
+
+  <button class="tilt-cfg-btn" id="temp-cfg-btn" onclick="openTempConfigDialog()" title="Configure temp/humidity byte offsets" style="display:none">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
+    Byte Offsets
+  </button>
+
+  <button class="tilt-cfg-btn" id="button-cfg-btn" onclick="openButtonConfigDialog()" title="Configure button byte offsets" style="display:none">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
+    Byte Offsets
+  </button>
+
+  <button class="tilt-cfg-btn" id="button-expire-btn" onclick="openButtonExpireDialog()" title="Configure button press expiry duration" style="display:none">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61l1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.962 8.962 0 0012 4c-4.97 0-9 4.03-9 9s4.02 9 9 9 9-4.03 9-9c0-2.12-.74-4.07-1.97-5.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>
+    Expiry Timer
+  </button>
+
+  <div class="app-bar-spacer"></div>
+
+  <!-- Add Device button -->
+  <button class="add-device-btn" onclick="openAddDeviceDialog()">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+    Add Device
+  </button>
+
+  <div class="scale-control">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14zm-1-7h2v2h2v2h-2v2h-2v-2h-2V11h2V9.5z"/></svg>
+    <input type="range" id="scale-slider" min="40" max="200" value="100" step="5">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+    <span class="scale-label" id="scale-label">100%</span>
+  </div>
+
+  <div class="app-bar-subtitle" id="last-seen">—</div>
+  <div class="conn-pill">
+    <div class="conn-dot connecting" id="conn-dot"></div>
+    <span id="conn-label">Connecting…</span>
+  </div>
+</header>
+
+<!-- ── Widget grid ── -->
+<div class="grid" id="grid">
+  <div id="drop-ghost"></div>
+</div>
+
+<!-- ── No-device placeholder (shown before first device selected) ── -->
+<div id="no-device-msg" style="display:none">
+  <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/></svg>
+  <span>Select a device from the Devices menu</span>
+</div>
+
+<!-- ── Add Device dialog ── -->
+<dialog id="add-device-dialog">
+  <div class="dialog-inner">
+    <div class="dialog-title">
+      <span>Add Device</span>
+      <button class="dialog-close" onclick="closeAddDeviceDialog()" title="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    </div>
+    <div class="field-group">
+      <div class="field-row">
+        <div class="field">
+          <label>Device Name</label>
+          <input id="ad-name" type="text" placeholder="My Device">
+        </div>
+        <div class="field">
+          <label>Mode <span class="required">*</span></label>
+          <select id="ad-mode" onchange="onAdModeChange()">
+            <option value="OTAA">OTAA</option>
+            <option value="ABP">ABP</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Device EUI <span class="required">*</span></label>
+        <input id="ad-dev-eui" type="text" class="hex" placeholder="0000000000000000" maxlength="19">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>LoRaWAN Specification <span class="required">*</span></label>
+          <select id="ad-lorawan-spec">
+            <option value="1.0.1">1.0.1</option>
+            <option value="1.0.2">1.0.2</option>
+            <option value="1.0.3" selected>1.0.3</option>
+            <option value="1.0.4">1.0.4</option>
+            <option value="1.1.0">1.1.0</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Device Class <span class="required">*</span></label>
+          <select id="ad-device-class">
+            <option value="A">Class A</option>
+            <option value="C">Class C</option>
+          </select>
+        </div>
+      </div>
+      <div id="ad-otaa-fields">
+        <div class="field-group" style="gap:16px">
+          <div class="field">
+            <label>App Key <span class="required">*</span></label>
+            <input id="ad-app-key" type="text" class="hex" placeholder="00000000000000000000000000000000" maxlength="47">
+          </div>
+          <div class="field">
+            <label>Join EUI</label>
+            <input id="ad-join-eui" type="text" class="hex" placeholder="0000000000000000" maxlength="19">
+          </div>
+        </div>
+      </div>
+      <div id="ad-abp-fields" style="display:none">
+        <div class="field-group" style="gap:16px">
+          <div class="field">
+            <label>Device Address <span class="required">*</span></label>
+            <input id="ad-dev-addr" type="text" class="hex" placeholder="00000000" maxlength="11">
+          </div>
+          <div class="field">
+            <label>App Session Key <span class="required">*</span></label>
+            <input id="ad-app-skey" type="text" class="hex" placeholder="00000000000000000000000000000000" maxlength="47">
+          </div>
+          <div class="field">
+            <label>Network Session Key <span class="required">*</span></label>
+            <input id="ad-nwk-skey" type="text" class="hex" placeholder="00000000000000000000000000000000" maxlength="47">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="ad-msg" class="dialog-msg"></div>
+    <p class="dialog-hint">Please restart the device and wait for the connection to establish, this can take up to 2 minutes!</p>
+    <div class="dialog-actions">
+      <button class="btn-cancel" onclick="closeAddDeviceDialog()">Cancel</button>
+      <button class="btn-submit" id="ad-submit-btn" onclick="submitAddDevice()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+        Add Device
+      </button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ── Tilt byte config dialog ── -->
+<dialog id="tilt-config-dialog">
+  <div class="dialog-inner">
+    <div class="dialog-title">
+      <span>Tilt Sensor Byte Offsets</span>
+      <button class="dialog-close" onclick="closeTiltConfigDialog()" title="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    </div>
+    <p class="dialog-hint" style="margin-top:0;margin-bottom:20px">
+      Each axis reads 2 bytes as a little-endian signed int16 starting at the given offset, then divides by 100 for degrees.
+    </p>
+    <div class="field-group">
+      <div class="tilt-axis-row">
+        <span class="gyro-axis-label gyro-axis-x">X</span>
+        <div class="field">
+          <label>Start byte</label>
+          <input id="tc-x" type="number" min="0" max="60" oninput="updateTiltPreview('x')">
+        </div>
+        <span class="tilt-bytes-preview" id="tc-x-preview">bytes 5–6</span>
+      </div>
+      <div class="tilt-axis-row">
+        <span class="gyro-axis-label gyro-axis-y">Y</span>
+        <div class="field">
+          <label>Start byte</label>
+          <input id="tc-y" type="number" min="0" max="60" oninput="updateTiltPreview('y')">
+        </div>
+        <span class="tilt-bytes-preview" id="tc-y-preview">bytes 7–8</span>
+      </div>
+      <div class="tilt-axis-row">
+        <span class="gyro-axis-label gyro-axis-z">Z</span>
+        <div class="field">
+          <label>Start byte</label>
+          <input id="tc-z" type="number" min="0" max="60" oninput="updateTiltPreview('z')">
+        </div>
+        <span class="tilt-bytes-preview" id="tc-z-preview">bytes 9–10</span>
+      </div>
+    </div>
+    <div id="tc-msg" class="dialog-msg"></div>
+    <div class="dialog-actions">
+      <button class="btn-cancel" onclick="closeTiltConfigDialog()">Cancel</button>
+      <button class="btn-submit" id="tc-submit" onclick="saveTiltByteConfig()">Save</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ── Temp/humidity byte config dialog ── -->
+<dialog id="temp-config-dialog">
+  <div class="dialog-inner">
+    <div class="dialog-title">
+      <span>Temp / Humidity Byte Offsets</span>
+      <button class="dialog-close" onclick="closeTempConfigDialog()" title="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    </div>
+    <p class="dialog-hint" style="margin-top:0;margin-bottom:20px">
+      Specify which bytes in the payload hold each value and how to scale them.
+    </p>
+    <div class="field-group">
+
+      <!-- Temperature row -->
+      <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--md-on-surface-variant);margin-bottom:4px">Temperature</div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="field" style="flex:0 0 100px">
+          <label>Start byte</label>
+          <input id="tcc-ts" type="number" min="0" max="60" oninput="updateTempPreview()">
+        </div>
+        <div class="field" style="flex:0 0 90px">
+          <label>Divisor</label>
+          <input id="tcc-td" type="number" min="0.001" step="any">
+        </div>
+        <span class="tilt-bytes-preview" id="tcc-tp">bytes 2–3</span>
+      </div>
+
+      <!-- Humidity row -->
+      <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--md-on-surface-variant);margin-bottom:4px;margin-top:8px">Humidity</div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="field" style="flex:0 0 100px">
+          <label>Start byte</label>
+          <input id="tcc-hs" type="number" min="0" max="60" oninput="updateTempPreview()">
+        </div>
+        <div class="field" style="flex:0 0 80px">
+          <label>Size</label>
+          <select id="tcc-hz" onchange="updateTempPreview()">
+            <option value="1">1 byte</option>
+            <option value="2">2 bytes</option>
+          </select>
+        </div>
+        <div class="field" style="flex:0 0 90px">
+          <label>Divisor</label>
+          <input id="tcc-hd" type="number" min="0.001" step="any">
+        </div>
+        <span class="tilt-bytes-preview" id="tcc-hp">byte 6</span>
+      </div>
+
+      <!-- Byte order -->
+      <div style="display:flex;align-items:center;gap:12px;margin-top:8px">
+        <div class="field" style="flex:0 0 180px">
+          <label>Byte order (multi-byte fields)</label>
+          <select id="tcc-le">
+            <option value="true">Little-endian (LE)</option>
+            <option value="false">Big-endian (BE)</option>
+          </select>
+        </div>
+      </div>
+
+    </div>
+    <div id="tcc-msg" class="dialog-msg"></div>
+    <div class="dialog-actions">
+      <button class="btn-cancel" onclick="closeTempConfigDialog()">Cancel</button>
+      <button class="btn-submit" id="tcc-submit" onclick="saveTempByteConfig()">Save</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ── Button byte config dialog ── -->
+<dialog id="button-config-dialog">
+  <div class="dialog-inner">
+    <div class="dialog-title">
+      <span>Button Byte Offsets</span>
+      <button class="dialog-close" onclick="closeButtonConfigDialog()" title="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    </div>
+    <p class="dialog-hint" style="margin-top:0;margin-bottom:20px">
+      Specify which byte to read for press detection. −1 reads the last byte of the payload.
+      A press is any non-zero value; a hold is the specific hold value; a double press is the specific double value (hex ending in 3).
+    </p>
+    <div class="field-group">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="field" style="flex:0 0 130px">
+          <label>Check byte (−1 = last)</label>
+          <input id="bc-byte" type="number" min="-1" max="60" oninput="updateButtonPreview()">
+        </div>
+        <div class="field" style="flex:0 0 110px">
+          <label>Hold value</label>
+          <input id="bc-hold" type="number" min="1" max="255">
+        </div>
+        <div class="field" style="flex:0 0 130px">
+          <label>Double press value</label>
+          <input id="bc-double" type="number" min="1" max="255">
+        </div>
+        <span class="tilt-bytes-preview" id="bc-preview">last byte</span>
+      </div>
+    </div>
+    <div id="bc-msg" class="dialog-msg"></div>
+    <div class="dialog-actions">
+      <button class="btn-cancel" onclick="closeButtonConfigDialog()">Cancel</button>
+      <button class="btn-submit" id="bc-submit" onclick="saveButtonByteConfig()">Save</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="button-expire-dialog">
+  <div class="dialog-inner">
+    <div class="dialog-title">
+      <span>Button Expiry Timer</span>
+      <button class="dialog-close" onclick="closeButtonExpireDialog()" title="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    </div>
+    <p class="dialog-hint" style="margin-top:0;margin-bottom:20px">
+      How many seconds after a press before the status automatically reverts to RELEASED,
+      if no new event arrives from the gateway.
+    </p>
+    <div class="field-group">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="field" style="flex:0 0 160px">
+          <label>Expiry (seconds)</label>
+          <input id="be-seconds" type="number" min="0.1" max="3600" step="0.1">
+        </div>
+      </div>
+    </div>
+    <div id="be-msg" class="dialog-msg"></div>
+    <div class="dialog-actions">
+      <button class="btn-cancel" onclick="closeButtonExpireDialog()">Cancel</button>
+      <button class="btn-submit" id="be-submit" onclick="saveButtonExpireSeconds()">Save</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="delete-device-dialog">
+  <div class="dialog-inner">
+    <div class="dialog-title">Remove Device</div>
+    <p id="delete-device-prompt" style="font-size:14px;color:var(--md-on-surface-variant);line-height:1.5;">Do you want to remove this device?</p>
+    <div id="delete-device-err" style="display:none;margin-top:10px;padding:10px 14px;border-radius:12px;font-size:13px;background:var(--md-error-container);color:var(--md-on-error-container);"></div>
+    <div class="dialog-actions">
+      <button class="btn-cancel" id="delete-no-btn" onclick="closeDeleteDialog()">No</button>
+      <button class="btn-danger" id="delete-yes-btn" onclick="confirmDeleteDevice()">Yes, Remove</button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+// =============================================================================
+// LoRaWAN Dashboard — multi-device client
+//
+// Device state:  deviceStates[devEUI] = { lastVal, lastChangeAt, sessionStart,
+//                  opens, closes, chartPts, log }
+// Widget DOM:    deviceWidgets[devEUI] = { status, stats, chart, log DOM nodes }
+// Selected EUI:  selectedEUI (string | null)
+// =============================================================================
+
+const WINDOW_MS  = 300000; // rolling chart window in ms
+const LAYOUT_KEY = 'lora-dashboard-layout-v2';
+const SCALE_KEY  = 'lora-dashboard-scale';
+
+// Reused button label — avoids repeating the long SVG string on every success/error reset.
+const ADD_DEVICE_BTN_HTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> Add Device';
+
+// ── Device type profiles ──────────────────────────────────────────────────
+const DEVICE_PROFILES = {
+  door:        { display:'Door Sensor',        analog:false, icon:'M19 19V5c0-1.1-.9-2-2-2H7c-1.1 0-2 .9-2 2v14H3v2h18v-2h-2zM9 12c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z' },
+  motion:      { display:'Motion Sensor',      analog:false, icon:'M13.49 5.48c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm-3.6 13.9l1-4.4 2.1 2v6h2v-7.5l-2.1-2 .6-3c1.3 1.5 3.3 2.5 5.5 2.5v-2c-1.9 0-3.5-1-4.3-2.4l-1-1.6c-.4-.6-1-1-1.7-1-.3 0-.5.1-.8.1l-5.2 2.2v4.7h2v-3.4l1.8-.7-1.6 8.1-4.9-1-.4 2 7 1.4z' },
+  tilt:        { display:'Tilt Sensor',        analog:true,  icon:'M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3A8.994 8.994 0 0 0 13 3.06V1h-2v2.06A8.994 8.994 0 0 0 3.06 11H1v2h2.06A8.994 8.994 0 0 0 11 20.94V23h2v-2.06A8.994 8.994 0 0 0 20.94 13H23v-2h-2.06z' },
+  button:      { display:'Button / Switch',    analog:false, icon:'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 14c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4z' },
+  temperature: { display:'Temp / Humidity',    analog:true,  icon:'M15 13V5c0-1.66-1.34-3-3-3S9 3.34 9 5v8c-1.21.91-2 2.37-2 4 0 2.76 2.24 5 5 5s5-2.24 5-5c0-1.63-.79-3.09-2-4zm-4-2V5c0-.55.45-1 1-1s1 .45 1 1v1h-1v1h1v1h-1v1h1v1h-2z' },
+  sound:       { display:'Sound Sensor',       analog:true,  icon:'M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z' },
+  generic:     { display:'Generic Sensor',     analog:false, icon:'M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z' },
+};
+function typeProfile(type) { return DEVICE_PROFILES[type] || DEVICE_PROFILES.generic; }
+function iconSVG(path, size=22) { return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor"><path d="${path}"/></svg>`; }
+
+// ── DOM cache ──────────────────────────────────────────────────────────────
+const dom = {
+  grid:        document.getElementById('grid'),
+  connDot:     document.getElementById('conn-dot'),
+  connLabel:   document.getElementById('conn-label'),
+  lastSeen:    document.getElementById('last-seen'),
+  scaleSlider: document.getElementById('scale-slider'),
+  scaleLabel:  document.getElementById('scale-label'),
+  noDevMsg:    document.getElementById('no-device-msg'),
+  devBtn:      document.getElementById('devices-btn'),
+  devDropdown: document.getElementById('devices-dropdown'),
+};
+
+// ── Per-device application state ───────────────────────────────────────────
+const deviceStates  = {};   // devEUI → state object
+const deviceWidgets = {};   // devEUI → widget DOM refs
+const deviceMeta    = {};   // devEUI → {name, online, battery, labelActive, labelInactive,
+                            //           deviceType, isAnalog}
+
+let selectedEUI    = null;
+let currentScale   = 1;
+let GRID_COLS      = 24;
+const BASE_CELL    = 60;
+
+// ── Device state factory ───────────────────────────────────────────────────
+function newDeviceState(serverStats) {
+  return {
+    // Binary fields
+    lastVal:      null,
+    lastChangeAt: serverStats?.last_change_ts ? serverStats.last_change_ts * 1000 : null,
+    sessionStart: serverStats?.server_start   ? serverStats.server_start   * 1000 : Date.now(),
+    opens:        serverStats?.opens   ?? 0,
+    closes:       serverStats?.closes  ?? 0,
+    holds:        serverStats?.holds   ?? 0,
+    doubles:      serverStats?.doubles ?? 0,
+    // Analog fields
+    lastRawValue: null,
+    lastUnit:     null,
+    lastExtra:    null,   // last extra dict (used by gyro/tilt for {x,y,z})
+    minValue:     serverStats?.min_value   ?? null,
+    maxValue:     serverStats?.max_value   ?? null,
+    sumValue:     serverStats?.sum_value   ?? 0,
+    countValue:   serverStats?.count_value ?? 0,
+    // Shared
+    chartPts:          [],    // {time, value} for binary; {time, rawValue} for analog; {time, x,y,z} for gyro
+    log:               [],
+    buttonExpireTimer: null,  // setTimeout handle that reverts button to RELEASED after 3s
+  };
+}
+
+// ── Devices dropdown ───────────────────────────────────────────────────────
+function toggleDevicesMenu() {
+  const open = dom.devDropdown.classList.toggle('open');
+  dom.devBtn.classList.toggle('open', open);
+}
+
+document.addEventListener('click', e => {
+  if (!document.getElementById('devices-menu-wrap').contains(e.target)) {
+    dom.devDropdown.classList.remove('open');
+    dom.devBtn.classList.remove('open');
+  }
+});
+
+function buildDevicesDropdown(devices) {
+  dom.devDropdown.innerHTML = '';
+  if (!devices.length) {
+    dom.devDropdown.innerHTML = '<div class="device-option" style="color:var(--md-outline);font-size:13px;cursor:default"><span>No devices found</span></div>';
+    return;
+  }
+
+  devices.forEach(dev => {
+    const eui     = dev.devEUI.toUpperCase();
+    const online  = dev.online;
+    const battery = dev.deviceStatusBatteryLevelUnavailable ? '—' :
+                    (dev.deviceStatusBatteryLevel ?? '—') + '%';
+
+    const opt = document.createElement('div');
+    opt.className = 'device-option' + (eui === selectedEUI ? ' selected' : '');
+    opt.dataset.eui = eui;
+    opt.innerHTML = `
+      <div class="dev-status-dot ${online ? 'online' : 'offline'}"></div>
+      <div class="dev-info">
+        <div class="dev-name">${escHtml(dev.name)}</div>
+        <div class="dev-meta">${escHtml(eui)} · ${online ? 'Online' : 'Offline'}</div>
+      </div>
+      <div class="dev-battery">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z"/></svg>
+        ${battery}
+      </div>
+    `;
+    opt.addEventListener('click', () => {
+      selectDevice(eui);
+      toggleDevicesMenu();
+    });
+    dom.devDropdown.appendChild(opt);
+  });
+}
+
+function updateDropdownSelection() {
+  dom.devDropdown.querySelectorAll('.device-option').forEach(opt => {
+    opt.classList.toggle('selected', opt.dataset.eui === selectedEUI);
+  });
+  // childNodes[2] is the text node between the chip icon and the chevron.
+  if (selectedEUI && deviceMeta[selectedEUI]) {
+    dom.devBtn.childNodes[2].textContent = ' ' + deviceMeta[selectedEUI].name;
+  } else {
+    dom.devBtn.childNodes[2].textContent = ' Devices';
+  }
+  document.getElementById('delete-device-btn').disabled = !selectedEUI;
+}
+
+function escHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ── Device metadata factory ────────────────────────────────────────────────
+// Used by both handleHydration and handleDevicesUpdate to avoid the duplicated
+// deviceMeta object literal. Maps raw gateway fields to our internal shape.
+function buildDeviceMeta(dev) {
+  return {
+    name:          dev.name,
+    online:        dev.online,
+    battery:       dev.deviceStatusBatteryLevel,
+    batteryUnavail:dev.deviceStatusBatteryLevelUnavailable,
+    labelActive:   dev.label_active   || 'ACTIVE',
+    labelInactive: dev.label_inactive || 'INACTIVE',
+    deviceType:    dev.device_type    || 'generic',
+    isAnalog:      !!(dev.is_analog),
+  };
+}
+
+// ── Widget creation ────────────────────────────────────────────────────────
+const DRAG_HANDLE_SVG = `<div class="drag-handle"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></div>`;
+const RESIZE_HANDLE_SVG = `<div class="resize-handle" draggable="false"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="4" y1="15" x2="15" y2="4" stroke-width="1.5"/><line x1="8" y1="15" x2="15" y2="8" stroke-width="1.5"/><line x1="12" y1="15" x2="15" y2="12" stroke-width="1.5"/></svg></div>`;
+
+function makeWidget(id) {
+  const w = document.createElement('div');
+  w.className  = 'widget';
+  w.id         = id;
+  w.draggable  = true;
+  w.style.display = 'none';
+  w.innerHTML  = DRAG_HANDLE_SVG + RESIZE_HANDLE_SVG;
+  attachDragListeners(w);
+  attachResizeListener(w);
+  dom.grid.appendChild(w);
+  return w;
+}
+
+function createDeviceWidgets(dev) {
+  const eui    = dev.devEUI.toUpperCase();
+  const name   = dev.name;
+  const suffix = eui.slice(-8);
+  const la     = dev.label_active   || 'ACTIVE';
+  const li     = dev.label_inactive || 'INACTIVE';
+  const dtype  = dev.device_type || 'generic';
+  const prof   = typeProfile(dtype);
+
+  // ── Status widget ─────────────────────────────────────────────────────────
+  const wStatus = makeWidget(`w-status-${suffix}`);
+  wStatus.insertAdjacentHTML('beforeend', `
+    <div class="widget-header">
+      <div class="widget-icon" id="whi-${suffix}">${iconSVG(prof.icon)}</div>
+      <div>
+        <div class="widget-title">${escHtml(name)}</div>
+        <div class="widget-subtitle">${escHtml(eui)}</div>
+      </div>
+    </div>
+    <div class="status-body">
+      <div class="status-ring idle" id="sr-${suffix}">
+        <div class="status-icon-svg" id="sic-${suffix}">${iconSVG(prof.icon, 72)}</div>
+      </div>
+      <div class="status-text idle" id="st-${suffix}">—</div>
+      <div class="analog-display" id="andsp-${suffix}" style="display:none">
+        <div class="analog-value-row">
+          <div class="analog-value" id="anv-${suffix}">—</div>
+          <div class="analog-unit"  id="anu-${suffix}"></div>
+        </div>
+        <div class="analog-extra-row" id="anex-${suffix}"></div>
+      </div>
+      <div class="gyro-display" id="gydsp-${suffix}" style="display:none">
+        <div class="gyro-row">
+          <span class="gyro-axis-label gyro-axis-x">X</span>
+          <span class="gyro-val gyro-val-x" id="gyx-${suffix}">—</span>
+          <span class="gyro-unit">°</span>
+        </div>
+        <div class="gyro-row">
+          <span class="gyro-axis-label gyro-axis-y">Y</span>
+          <span class="gyro-val gyro-val-y" id="gyy-${suffix}">—</span>
+          <span class="gyro-unit">°</span>
+        </div>
+        <div class="gyro-row">
+          <span class="gyro-axis-label gyro-axis-z">Z</span>
+          <span class="gyro-val gyro-val-z" id="gyz-${suffix}">—</span>
+          <span class="gyro-unit">°</span>
+        </div>
+      </div>
+      <div class="status-since" id="ss-${suffix}">Waiting for data…</div>
+    </div>`);
+
+  // ── Stats widget ──────────────────────────────────────────────────────────
+  const wStats = makeWidget(`w-stats-${suffix}`);
+  const lbl0 = la === 'OPEN' ? 'Opens' : la === 'ACTIVE' ? 'Triggers' : la + 's';
+  const lbl1 = li === 'CLOSED' ? 'Closes' : li === 'INACTIVE' ? 'Clears' : li + 's';
+  wStats.insertAdjacentHTML('beforeend', `
+    <div class="widget-header">
+      <div class="widget-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M5 9.2h3V19H5zM10.6 5h2.8v14h-2.8zm5.6 8H19v6h-2.8z"/></svg>
+      </div>
+      <div>
+        <div class="widget-title">Statistics</div>
+        <div class="widget-subtitle">${escHtml(name)}</div>
+      </div>
+    </div>
+    <div class="stats-grid" id="sgb-${suffix}">
+      <div class="stat-tile accent-open">
+        <div class="stat-val" id="so-${suffix}">0</div>
+        <div class="stat-lbl">${escHtml(lbl0)}</div>
+      </div>
+      <div class="stat-tile accent-closed">
+        <div class="stat-val" id="sc-${suffix}">0</div>
+        <div class="stat-lbl">${escHtml(lbl1)}</div>
+      </div>
+      <div class="stat-tile btn-stat" id="sh-${suffix}" style="display:none">
+        <div class="stat-val" id="sholds-${suffix}">0</div>
+        <div class="stat-lbl">Holds</div>
+      </div>
+      <div class="stat-tile btn-stat" id="sd-${suffix}" style="display:none">
+        <div class="stat-val" id="sdoubles-${suffix}">0</div>
+        <div class="stat-lbl">Doubles</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-val" id="srate-${suffix}">—</div>
+        <div class="stat-lbl">Events / min</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-val" id="sdur-${suffix}">—</div>
+        <div class="stat-lbl">State age</div>
+      </div>
+    </div>
+    <div class="stats-grid" id="sga-${suffix}" style="display:none">
+      <div class="stat-tile">
+        <div class="stat-val" id="scurr-${suffix}">—</div>
+        <div class="stat-lbl">Current</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-val" id="smin-${suffix}">—</div>
+        <div class="stat-lbl">Minimum</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-val" id="smax-${suffix}">—</div>
+        <div class="stat-lbl">Maximum</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-val" id="savg-${suffix}">—</div>
+        <div class="stat-lbl">Average</div>
+      </div>
+    </div>
+    <div class="stats-grid" id="sgg-${suffix}" style="display:none">
+      <div class="stat-tile" style="border-left:3px solid #c0392b">
+        <div class="stat-val" id="sgx-${suffix}">—</div>
+        <div class="stat-lbl">X Axis °</div>
+      </div>
+      <div class="stat-tile" style="border-left:3px solid #2471a3">
+        <div class="stat-val" id="sgy-${suffix}">—</div>
+        <div class="stat-lbl">Y Axis °</div>
+      </div>
+      <div class="stat-tile" style="border-left:3px solid #1e8449">
+        <div class="stat-val" id="sgz-${suffix}">—</div>
+        <div class="stat-lbl">Z Axis °</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-val" id="sghoriz-${suffix}">—</div>
+        <div class="stat-lbl">Horizontal °</div>
+      </div>
+    </div>`);
+
+  // ── Chart widget ──────────────────────────────────────────────────────────
+  const wChart = makeWidget(`w-chart-${suffix}`);
+  wChart.insertAdjacentHTML('beforeend', `
+    <div class="widget-header">
+      <div class="widget-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z"/></svg>
+      </div>
+      <div>
+        <div class="widget-title">Activity Timeline</div>
+        <div class="widget-subtitle">Last 5 minutes · ${escHtml(name)}</div>
+      </div>
+    </div>
+    <div class="chart-wrap">
+      <canvas class="chart-canvas" id="cc-${suffix}"></canvas>
+      <div class="chart-legend" id="cleg-${suffix}">
+        <div class="legend-item"><div class="legend-pip" style="background:var(--c-closed)"></div>${escHtml(li)}</div>
+        <div class="legend-item"><div class="legend-pip" style="background:var(--c-open)"></div>${escHtml(la)}</div>
+      </div>
+    </div>`);
+
+  // ── Log widget ────────────────────────────────────────────────────────────
+  const wLog = makeWidget(`w-log-${suffix}`);
+  wLog.insertAdjacentHTML('beforeend', `
+    <div class="widget-header">
+      <div class="widget-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+      </div>
+      <div>
+        <div class="widget-title">Event Log</div>
+        <div class="widget-subtitle">${escHtml(name)}</div>
+      </div>
+      <button class="export-btn" onclick="exportLog('${eui}')" title="Export log.txt">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zm-8 2V5h2v6h1.17L12 13.17 9.83 11H11zm-6 7h14v2H5z"/></svg>
+        Export
+      </button>
+    </div>
+    <div class="log-wrap" id="lw-${suffix}">
+      <div class="log-empty" id="le-${suffix}">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+        <span>Waiting for events…</span>
+      </div>
+    </div>`);
+
+  // Cache widget DOM refs
+  deviceWidgets[eui] = {
+    wStatus, wStats, wChart, wLog,
+    widgetIcon:   document.getElementById(`whi-${suffix}`),
+    statusRing:   document.getElementById(`sr-${suffix}`),
+    statusIconCont:document.getElementById(`sic-${suffix}`),
+    statusText:   document.getElementById(`st-${suffix}`),
+    analogDisplay:document.getElementById(`andsp-${suffix}`),
+    analogValue:  document.getElementById(`anv-${suffix}`),
+    analogUnit:   document.getElementById(`anu-${suffix}`),
+    analogExtra:  document.getElementById(`anex-${suffix}`),
+    gyroDisplay:  document.getElementById(`gydsp-${suffix}`),
+    gyroX:        document.getElementById(`gyx-${suffix}`),
+    gyroY:        document.getElementById(`gyy-${suffix}`),
+    gyroZ:        document.getElementById(`gyz-${suffix}`),
+    statusSince:  document.getElementById(`ss-${suffix}`),
+    statsBinary:  document.getElementById(`sgb-${suffix}`),
+    statsAnalog:  document.getElementById(`sga-${suffix}`),
+    statsGyro:    document.getElementById(`sgg-${suffix}`),
+    stOpens:      document.getElementById(`so-${suffix}`),
+    stCloses:     document.getElementById(`sc-${suffix}`),
+    stHoldsTile:  document.getElementById(`sh-${suffix}`),
+    stDoublesTile:document.getElementById(`sd-${suffix}`),
+    stHolds:      document.getElementById(`sholds-${suffix}`),
+    stDoubles:    document.getElementById(`sdoubles-${suffix}`),
+    stRate:       document.getElementById(`srate-${suffix}`),
+    stDur:        document.getElementById(`sdur-${suffix}`),
+    stCurrent:    document.getElementById(`scurr-${suffix}`),
+    stMin:        document.getElementById(`smin-${suffix}`),
+    stMax:        document.getElementById(`smax-${suffix}`),
+    stAvg:        document.getElementById(`savg-${suffix}`),
+    stGyroX:      document.getElementById(`sgx-${suffix}`),
+    stGyroY:      document.getElementById(`sgy-${suffix}`),
+    stGyroZ:      document.getElementById(`sgz-${suffix}`),
+    stGyroHoriz:  document.getElementById(`sghoriz-${suffix}`),
+    chartCanvas:  document.getElementById(`cc-${suffix}`),
+    chartLegend:  document.getElementById(`cleg-${suffix}`),
+    logWrap:      document.getElementById(`lw-${suffix}`),
+    logEmpty:     document.getElementById(`le-${suffix}`),
+  };
+
+  // Apply layout and initial type styling
+  applyDeviceLayout(eui);
+  applyDeviceType(eui, dtype);
+}
+
+// ── Device selection ───────────────────────────────────────────────────────
+function selectDevice(eui) {
+  eui = eui.toUpperCase();
+  selectedEUI = eui;
+
+  // Hide all widget sets
+  Object.keys(deviceWidgets).forEach(e => {
+    const ws = deviceWidgets[e];
+    ws.wStatus.style.display = 'none';
+    ws.wStats.style.display  = 'none';
+    ws.wChart.style.display  = 'none';
+    ws.wLog.style.display    = 'none';
+  });
+
+  // Show selected device's widgets
+  const ws = deviceWidgets[eui];
+  if (ws) {
+    ws.wStatus.style.display = '';
+    ws.wStats.style.display  = '';
+    ws.wChart.style.display  = '';
+    ws.wLog.style.display    = '';
+    dom.noDevMsg.style.display = 'none';
+    drawChart(eui);
+  } else {
+    dom.noDevMsg.style.display = '';
+  }
+
+  updateDropdownSelection();
+  updateTypeSelector(eui);
+  const dm = deviceMeta[eui];
+  if (dm) applyDeviceType(eui, dm.deviceType || 'generic');
+  localStorage.setItem('lora-selected-device', eui);
+
+  // Immediately paint the status widget from the last known state so it isn't
+  // blank/greyed until the next live event arrives.
+  refreshDeviceStatus(eui);
+}
+
+function refreshDeviceStatus(eui) {
+  const ds = deviceStates[eui];
+  const dm = deviceMeta[eui];
+  if (!ds || !dm) return;
+
+  if (dm.deviceType === 'tilt' && ds.lastExtra?.x !== undefined) {
+    updateGyroStatus(eui, ds.lastExtra.x, ds.lastExtra.y, ds.lastExtra.z);
+  } else if (dm.isAnalog) {
+    if (ds.lastRawValue !== null) {
+      updateAnalogStatus(eui, ds.lastRawValue, ds.lastUnit, ds.lastExtra || {});
+    }
+  } else {
+    if (ds.lastVal !== null) {
+      updateStatusWidget(eui, ds.lastVal, ds.lastExtra || {});
+    }
+  }
+
+  updateStats(eui);
+}
+
+// ── SSE connection ─────────────────────────────────────────────────────────
+let evtSrc = null;
+
+function connect() {
+  setConn('connecting');
+  evtSrc = new EventSource('/events');
+  evtSrc.onopen = () => setConn('connected');
+
+  evtSrc.onmessage = e => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.devices !== undefined) {
+      // Full state dump sent once on connect: devices + history + stats.
+      handleHydration(msg);
+    } else if (msg.devices_update !== undefined) {
+      // Device added or removed from the gateway.
+      handleDevicesUpdate(msg.devices_update);
+    } else if (msg.devEUI) {
+      // Live sensor event.
+      ingestEvent(msg.devEUI.toUpperCase(), msg);
+    }
+  };
+
+  evtSrc.onerror = () => {
+    setConn('error');
+    evtSrc.close();
+    setTimeout(connect, 3000);
+  };
+}
+
+function setConn(s) {
+  dom.connDot.className     = 'conn-dot ' + s;
+  dom.connLabel.textContent = s === 'connected' ? 'Connected'
+                            : s === 'error'     ? 'Reconnecting…'
+                            :                     'Connecting…';
+}
+
+// ── Hydration ──────────────────────────────────────────────────────────────
+function handleHydration(msg) {
+  const devices  = msg.devices  || [];
+  const histMap  = msg.history_by_device  || {};
+  const statsMap = msg.stats_by_device    || {};
+
+  // Register metadata and build widgets for new devices
+  devices.forEach(dev => {
+    const eui = dev.devEUI.toUpperCase();
+    deviceMeta[eui] = buildDeviceMeta(dev);
+    const dtype = deviceMeta[eui].deviceType;
+
+    if (!deviceStates[eui]) {
+      deviceStates[eui] = newDeviceState(statsMap[eui]);
+    } else {
+      const ss = statsMap[eui];
+      if (ss) {
+        if (ss.opens       != null) deviceStates[eui].opens       = ss.opens;
+        if (ss.closes      != null) deviceStates[eui].closes      = ss.closes;
+        if (ss.holds       != null) deviceStates[eui].holds       = ss.holds;
+        if (ss.doubles     != null) deviceStates[eui].doubles     = ss.doubles;
+        if (ss.server_start)        deviceStates[eui].sessionStart = ss.server_start * 1000;
+        if (ss.last_change_ts)      deviceStates[eui].lastChangeAt = ss.last_change_ts * 1000;
+        if (ss.min_value   != null) deviceStates[eui].minValue    = ss.min_value;
+        if (ss.max_value   != null) deviceStates[eui].maxValue    = ss.max_value;
+        if (ss.sum_value   != null) deviceStates[eui].sumValue    = ss.sum_value;
+        if (ss.count_value != null) deviceStates[eui].countValue  = ss.count_value;
+      }
+    }
+    if (!deviceWidgets[eui]) createDeviceWidgets(dev);
+    else applyDeviceType(eui, dtype);
+  });
+
+  buildDevicesDropdown(devices);
+
+  // Replay history per device
+  Object.entries(histMap).forEach(([eui, hist]) => {
+    eui = eui.toUpperCase();
+    hist.forEach(ev => ingestEvent(eui, ev));
+    if (statsMap[eui]) applyStats(eui, statsMap[eui]);
+  });
+
+  // Auto-select: restore last selection or pick first device
+  const restored = localStorage.getItem('lora-selected-device');
+  const firstEUI = devices[0]?.devEUI?.toUpperCase();
+  const target   = (restored && deviceWidgets[restored]) ? restored : firstEUI;
+  if (target) selectDevice(target);
+  else        dom.noDevMsg.style.display = '';
+}
+
+// ── Device list update (add / remove) ──────────────────────────────────────
+function removeDeviceWidgets(eui) {
+  const ws = deviceWidgets[eui];
+  if (!ws) return;
+  ws.wStatus.remove();
+  ws.wStats.remove();
+  ws.wChart.remove();
+  ws.wLog.remove();
+  delete deviceWidgets[eui];
+  delete deviceStates[eui];
+  delete deviceMeta[eui];
+}
+
+function handleDevicesUpdate(devices) {
+  const freshEUIs = new Set(devices.map(d => d.devEUI.toUpperCase()));
+
+  // Remove devices no longer on the gateway
+  Object.keys(deviceWidgets).forEach(eui => {
+    if (!freshEUIs.has(eui)) removeDeviceWidgets(eui);
+  });
+
+  // Update metadata and create widgets for new devices
+  devices.forEach(dev => {
+    const eui = dev.devEUI.toUpperCase();
+    deviceMeta[eui] = buildDeviceMeta(dev);
+    const dtype = deviceMeta[eui].deviceType;
+
+    if (!deviceStates[eui])  deviceStates[eui]  = newDeviceState(null);
+    if (!deviceWidgets[eui]) createDeviceWidgets(dev);
+    else                     applyDeviceType(eui, dtype);
+  });
+
+  buildDevicesDropdown(devices);
+
+  // If the selected device was removed, pick another
+  if (selectedEUI && !freshEUIs.has(selectedEUI)) {
+    const firstEUI = devices[0]?.devEUI?.toUpperCase();
+    if (firstEUI) selectDevice(firstEUI);
+    else { selectedEUI = null; dom.noDevMsg.style.display = ''; }
+  }
+}
+
+// ── Event ingestion ────────────────────────────────────────────────────────
+// Routes incoming sensor events to the correct handler.
+// Analog types (temperature, tilt, sound) carry a raw_value; binary types
+// (door, motion, button) carry only a value (0 = active, 1 = inactive).
+function ingestEvent(eui, ev) {
+  const dm = deviceMeta[eui];
+  if (dm?.isAnalog || ev.raw_value !== undefined) {
+    ingestAnalogEvent(eui, ev);
+  } else {
+    ingestBinaryEvent(eui, ev);
+  }
+}
+
+function ingestBinaryEvent(eui, ev) {
+  const ds = deviceStates[eui];
+  if (!ds) return;
+
+  const val = ev.value;
+  const ms  = ev.timestamp * 1000;
+
+  if (eui === selectedEUI) {
+    dom.lastSeen.textContent = 'Last: ' + new Date(ms).toLocaleTimeString('en-US', {
+      hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+  }
+
+  const prevChangeAt = ds.lastChangeAt;
+  const extra        = ev.extra || {};
+  if (ev.stats) applyStats(eui, ev.stats);
+
+  // Button events always log (fire on every press/hold, not just state changes).
+  const dm       = deviceMeta[eui];
+  const isButton = dm?.deviceType === 'button';
+  if (isButton || (ds.lastVal !== null && val !== ds.lastVal)) {
+    addLogRow(eui, val, ms, prevChangeAt != null ? ms - prevChangeAt : null, extra);
+  }
+  if (val !== ds.lastVal || isButton) {
+    ds.lastVal      = val;
+    ds.lastExtra    = extra;
+    ds.lastChangeAt = ms;
+    if (eui === selectedEUI) updateStatusWidget(eui, val, extra);
+  }
+
+  // Button: cancel any pending expiry timer on every incoming event, then
+  // start a new 3-second countdown when the button is pressed or held.
+  // If no follow-up event arrives in time, the status reverts to RELEASED.
+  if (isButton) {
+    if (ds.buttonExpireTimer) clearTimeout(ds.buttonExpireTimer);
+    ds.buttonExpireTimer = null;
+
+    if (val === 0) {
+      ds.buttonExpireTimer = setTimeout(() => {
+        ds.buttonExpireTimer = null;
+        ds.lastVal = 1;
+        // Push a synthetic release point so the chart shows the revert.
+        const expireMs = Date.now();
+        ds.chartPts.push({ time: expireMs, value: 1 });
+        if (eui === selectedEUI) {
+          updateStatusWidget(eui, 1, {});
+          drawChart(eui);
+        }
+      }, buttonExpireMs);
+    }
+  }
+
+  ds.chartPts.push({ time: ms, value: val, extra });
+  // Keep 2s more than the visible window so the right edge never goes blank.
+  const cutoff = Date.now() - 302000;
+  while (ds.chartPts.length && ds.chartPts[0].time < cutoff) ds.chartPts.shift();
+
+  if (eui === selectedEUI) drawChart(eui);
+}
+
+function ingestAnalogEvent(eui, ev) {
+  const ds = deviceStates[eui];
+  const dm = deviceMeta[eui];
+  if (!ds || !dm) return;
+
+  const rv    = ev.raw_value;
+  const unit  = ev.unit   || '';
+  const ms    = ev.timestamp * 1000;
+  const extra = ev.extra || {};
+
+  if (eui === selectedEUI) {
+    dom.lastSeen.textContent = 'Last: ' + new Date(ms).toLocaleTimeString('en-US', {
+      hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+  }
+
+  if (ev.stats) applyStats(eui, ev.stats);
+
+  const cutoff = Date.now() - 302000;
+
+  // Tilt sensor sends {x, y, z} degrees in extra rather than a scalar raw_value.
+  // Store as a separate chartPts shape and skip the normal analog path.
+  if (dm.deviceType === 'tilt' && extra.x !== undefined) {
+    ds.lastExtra = extra;
+    ds.chartPts.push({ time: ms, x: extra.x, y: extra.y, z: extra.z });
+    while (ds.chartPts.length && ds.chartPts[0].time < cutoff) ds.chartPts.shift();
+
+    addGyroLogRow(eui, extra.x, extra.y, extra.z, ms);
+    if (eui === selectedEUI) {
+      updateGyroStatus(eui, extra.x, extra.y, extra.z);
+      updateStats(eui);
+      drawChart(eui);
+    }
+    return;
+  }
+
+  if (rv !== null && rv !== undefined) {
+    ds.lastRawValue = rv;
+    ds.lastUnit     = unit;
+
+    if (ds.minValue === null || rv < ds.minValue) ds.minValue = rv;
+    if (ds.maxValue === null || rv > ds.maxValue) ds.maxValue = rv;
+    ds.sumValue   += rv;
+    ds.countValue += 1;
+
+    ds.chartPts.push({ time: ms, rawValue: rv });
+    while (ds.chartPts.length && ds.chartPts[0].time < cutoff) ds.chartPts.shift();
+
+    addAnalogLogRow(eui, rv, unit, extra, ms);
+
+    if (eui === selectedEUI) {
+      updateAnalogStatus(eui, rv, unit, extra);
+      updateStats(eui);
+      drawChart(eui);
+    }
+  }
+}
+
+function applyStats(eui, s) {
+  const ds = deviceStates[eui];
+  if (!ds) return;
+  if (s.opens        != null) ds.opens       = s.opens;
+  if (s.closes       != null) ds.closes      = s.closes;
+  if (s.holds        != null) ds.holds       = s.holds;
+  if (s.doubles      != null) ds.doubles     = s.doubles;
+  if (s.server_start)         ds.sessionStart = s.server_start * 1000;
+  if (s.last_change_ts)       ds.lastChangeAt = s.last_change_ts * 1000;
+  if (s.min_value    != null) ds.minValue    = s.min_value;
+  if (s.max_value    != null) ds.maxValue    = s.max_value;
+  if (s.sum_value    != null) ds.sumValue    = s.sum_value;
+  if (s.count_value  != null) ds.countValue  = s.count_value;
+  if (eui === selectedEUI) updateStats(eui);
+}
+
+// ── Status widget ──────────────────────────────────────────────────────────
+function updateStatusWidget(eui, val, extra) {
+  const ws = deviceWidgets[eui];
+  const dm = deviceMeta[eui];
+  if (!ws || !dm) return;
+  const la = dm.labelActive;
+  const li = dm.labelInactive;
+  if (val === 0) {
+    const ringCls = extra?.held ? 'held' : extra?.double ? 'double' : 'open';
+    ws.statusRing.className   = `status-ring ${ringCls}`;
+    ws.statusText.className   = `status-text ${ringCls}`;
+    ws.statusText.textContent = extra?.held ? 'HELD' : extra?.double ? 'DOUBLE' : la;
+  } else {
+    ws.statusRing.className   = 'status-ring closed';
+    ws.statusText.className   = 'status-text closed';
+    ws.statusText.textContent = li;
+  }
+}
+
+function updateAnalogStatus(eui, rawValue, unit, extra) {
+  const ws = deviceWidgets[eui];
+  if (!ws) return;
+  ws.analogValue.textContent = rawValue !== null ? String(rawValue) : '—';
+  ws.analogUnit.textContent  = unit || '';
+
+  ws.analogExtra.innerHTML = '';
+  const EXTRA_UNITS = { humidity: '%', temperature: '°C', pressure: 'hPa', co2: 'ppm', voc: 'ppb' };
+  for (const [k, v] of Object.entries(extra || {})) {
+    const chip = document.createElement('div');
+    chip.className = 'analog-extra-chip';
+    chip.textContent = `${k.replace(/_/g, ' ')}: ${v}${EXTRA_UNITS[k] || ''}`;
+    ws.analogExtra.appendChild(chip);
+  }
+}
+
+function updateGyroStatus(eui, x, y, z) {
+  const ws = deviceWidgets[eui];
+  if (!ws) return;
+  ws.gyroX.textContent = x !== undefined ? x.toFixed(2) : '—';
+  ws.gyroY.textContent = y !== undefined ? y.toFixed(2) : '—';
+  ws.gyroZ.textContent = z !== undefined ? z.toFixed(2) : '—';
+}
+
+// ── Stats widget ───────────────────────────────────────────────────────────
+function updateStats(eui) {
+  const ws = deviceWidgets[eui];
+  const ds = deviceStates[eui];
+  const dm = deviceMeta[eui];
+  if (!ws || !ds || !dm) return;
+
+  if (dm.deviceType === 'tilt' && dm.isAnalog) {
+    const ex = ds.lastExtra || {};
+    const x = ex.x, y = ex.y, z = ex.z;
+    ws.stGyroX.textContent     = x !== undefined ? x.toFixed(2) + '°' : '—';
+    ws.stGyroY.textContent     = y !== undefined ? y.toFixed(2) + '°' : '—';
+    ws.stGyroZ.textContent     = z !== undefined ? z.toFixed(2) + '°' : '—';
+    if (x !== undefined && y !== undefined) {
+      const horiz = Math.sqrt(x * x + y * y);
+      ws.stGyroHoriz.textContent = horiz.toFixed(2) + '°';
+    }
+  } else if (dm.isAnalog) {
+    const unit = ds.lastUnit || '';
+    ws.stCurrent.textContent = ds.lastRawValue !== null ? ds.lastRawValue + unit : '—';
+    ws.stMin.textContent     = ds.minValue     !== null ? ds.minValue     + unit : '—';
+    ws.stMax.textContent     = ds.maxValue     !== null ? ds.maxValue     + unit : '—';
+    ws.stAvg.textContent     = ds.countValue > 0
+      ? (ds.sumValue / ds.countValue).toFixed(1) + unit : '—';
+  } else {
+    ws.stOpens.textContent  = ds.opens;
+    ws.stCloses.textContent = ds.closes;
+    if (ws.stHolds)   ws.stHolds.textContent   = ds.holds   ?? 0;
+    if (ws.stDoubles) ws.stDoubles.textContent = ds.doubles ?? 0;
+    const elapsedMin = (Date.now() - ds.sessionStart) / 60000;
+    const total      = ds.opens + ds.closes;
+    ws.stRate.textContent = elapsedMin > 0.1 ? (total / elapsedMin).toFixed(1) : '—';
+  }
+}
+
+// Called every second to tick elapsed-time displays ("state age", "X ago").
+// Also calls updateStats so analog averages stay current without needing a new event.
+function updateStatsDuration() {
+  if (!selectedEUI) return;
+  const ws = deviceWidgets[selectedEUI];
+  const ds = deviceStates[selectedEUI];
+  const dm = deviceMeta[selectedEUI];
+  if (!ws || !ds || !dm) return;
+  if (!dm.isAnalog && ds.lastChangeAt) {
+    const secs = Math.floor((Date.now() - ds.lastChangeAt) / 1000);
+    ws.stDur.textContent       = fmtDur(secs);
+    ws.statusSince.textContent = fmtDur(secs) + ' ago';
+  }
+  updateStats(selectedEUI);
+}
+
+function fmtDur(s) {
+  if (s < 60)   return s + 's';
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+// ── Event log ──────────────────────────────────────────────────────────────
+function addLogRow(eui, val, ms, prevDurMs, extra) {
+  const ws = deviceWidgets[eui];
+  const ds = deviceStates[eui];
+  const dm = deviceMeta[eui];
+  if (!ws || !ds || !dm) return;
+
+  const le = ws.logEmpty;
+  if (le) le.remove();
+  ws.logEmpty = null;
+
+  const isOpen = val === 0;
+  const isHeld   = isOpen && !!extra?.held;
+  const isDouble = isOpen && !!extra?.double;
+  const cls       = isHeld ? 'held' : isDouble ? 'double' : isOpen ? 'open' : 'closed';
+  const stateText = isHeld   ? 'HELD'
+                  : isDouble  ? 'DOUBLE'
+                  : isOpen    ? dm.labelActive
+                  :             dm.labelInactive;
+  const timeStr   = new Date(ms).toLocaleTimeString('en-US', {
+    hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+    fractionalSecondDigits: 2,
+  });
+  const durStr = prevDurMs != null ? `(prev: ${fmtDur(Math.round(prevDurMs / 1000))})` : '';
+
+  const row = document.createElement('div');
+  row.className = 'log-row';
+  row.innerHTML = `
+    <div class="log-pip ${cls}"></div>
+    <div class="log-state ${cls}">${escHtml(stateText)}</div>
+    <div class="log-time">${timeStr}</div>
+    <div class="log-dur">${durStr}</div>
+    <div class="log-raw">val=${val}</div>
+  `;
+
+  ds.log.push({ ms, val, prevDurMs, extra: extra || {} });
+  ws.logWrap.insertBefore(row, ws.logWrap.firstChild);
+  while (ws.logWrap.children.length > 300) ws.logWrap.removeChild(ws.logWrap.lastChild);
+}
+
+function addAnalogLogRow(eui, rawValue, unit, extra, ms) {
+  const ws = deviceWidgets[eui];
+  const ds = deviceStates[eui];
+  if (!ws || !ds) return;
+
+  const le = ws.logEmpty;
+  if (le) le.remove();
+  ws.logEmpty = null;
+
+  const timeStr = new Date(ms).toLocaleTimeString('en-US', {
+    hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+    fractionalSecondDigits: 2,
+  });
+  const extraStr = Object.entries(extra || {}).map(([k, v]) => `${k}: ${v}`).join(' · ');
+
+  const row = document.createElement('div');
+  row.className = 'log-row';
+  row.innerHTML = `
+    <div class="log-pip" style="background:var(--md-primary)"></div>
+    <div class="log-state" style="color:var(--md-primary)">${rawValue}${escHtml(unit)}</div>
+    <div class="log-time">${timeStr}</div>
+    ${extraStr ? `<div class="log-dur">${escHtml(extraStr)}</div>` : ''}
+  `;
+  ds.log.push({ ms, rawValue, unit });
+  ws.logWrap.insertBefore(row, ws.logWrap.firstChild);
+  while (ws.logWrap.children.length > 300) ws.logWrap.removeChild(ws.logWrap.lastChild);
+}
+
+function addGyroLogRow(eui, x, y, z, ms) {
+  const ws = deviceWidgets[eui];
+  const ds = deviceStates[eui];
+  if (!ws || !ds) return;
+
+  const le = ws.logEmpty;
+  if (le) le.remove();
+  ws.logEmpty = null;
+
+  const timeStr = new Date(ms).toLocaleTimeString('en-US', {
+    hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+    fractionalSecondDigits: 2,
+  });
+
+  const row = document.createElement('div');
+  row.className = 'log-row';
+  row.innerHTML = `
+    <div class="log-pip" style="background:var(--md-primary)"></div>
+    <div class="log-state" style="color:var(--md-primary)">X ${x?.toFixed(2)}° Y ${y?.toFixed(2)}° Z ${z?.toFixed(2)}°</div>
+    <div class="log-time">${timeStr}</div>
+  `;
+  ds.log.push({ ms, x, y, z });
+  ws.logWrap.insertBefore(row, ws.logWrap.firstChild);
+  while (ws.logWrap.children.length > 300) ws.logWrap.removeChild(ws.logWrap.lastChild);
+}
+
+// ── Activity chart ─────────────────────────────────────────────────────────
+function drawChart(eui) {
+  const ws = deviceWidgets[eui];
+  const ds = deviceStates[eui];
+  const dm = deviceMeta[eui];
+  if (!ws || !ds || !dm) return;
+
+  const canvas = ws.chartCanvas;
+  if (!canvas.offsetParent) return;
+
+  const dpr  = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+
+  canvas.width  = rect.width  * dpr;
+  canvas.height = rect.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const W   = rect.width;
+  const H   = rect.height;
+  const now = Date.now();
+  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const cs   = getComputedStyle(document.documentElement);
+
+  const cBg    = cs.getPropertyValue('--md-surf-high').trim();
+  const cGrid  = dark ? 'rgba(255,255,255,.07)' : 'rgba(0,0,0,.06)';
+  const cLabel = dark ? 'rgba(255,255,255,.45)' : 'rgba(0,0,0,.38)';
+
+  const fontSize = Math.max(7, Math.round(11 * currentScale));
+  const padLeft  = Math.round(56 * currentScale);
+  const padBot   = Math.round(26 * currentScale);
+  const padTop   = 12;
+  const padRight = 12;
+
+  ctx.fillStyle = cBg;
+  ctx.beginPath(); ctx.roundRect(0, 0, W, H, 8); ctx.fill();
+
+  const plotW = W - padLeft - padRight;
+  const plotH = H - padTop  - padBot;
+
+  // Time grid (shared)
+  ctx.strokeStyle = cGrid; ctx.lineWidth = 1;
+  ctx.font        = `${fontSize}px system-ui`;
+  ctx.fillStyle   = cLabel; ctx.textAlign = 'center';
+  for (let i = 0; i <= 6; i++) {
+    const x    = padLeft + (i / 6) * plotW;
+    const secs = Math.round(WINDOW_MS / 1000 * (1 - i / 6));
+    ctx.beginPath(); ctx.moveTo(x, padTop); ctx.lineTo(x, H - padBot + 4); ctx.stroke();
+    ctx.fillText(secs === 0 ? 'now' : `-${secs}s`, x, H - Math.round(fontSize * 0.4));
+  }
+
+  const nowX = padLeft + plotW;
+  ctx.strokeStyle = dark ? 'rgba(255,255,255,.5)' : 'rgba(0,0,0,.3)';
+  ctx.lineWidth = 1; ctx.setLineDash([3, 4]);
+  ctx.beginPath(); ctx.moveTo(nowX, padTop); ctx.lineTo(nowX, H - padBot + 4); ctx.stroke();
+  ctx.setLineDash([]);
+
+  if (dm.isAnalog) {
+    drawAnalogChart(eui, ctx, W, H, plotW, plotH, padLeft, padTop, padBot, fontSize, cLabel, now, dark, cs);
+  } else {
+    drawBinaryChart(eui, ctx, W, H, plotW, plotH, padLeft, padTop, padBot, fontSize, cLabel, now, cs, dm);
+  }
+}
+
+function drawBinaryChart(eui, ctx, W, H, plotW, plotH, padLeft, padTop, padBot, fontSize, cLabel, now, cs, dm) {
+  const ds      = deviceStates[eui];
+  const cClosed = cs.getPropertyValue('--c-closed').trim();
+  const cOpen   = cs.getPropertyValue('--c-open').trim();
+  const cHeld   = cs.getPropertyValue('--c-held').trim();
+  const cDouble = cs.getPropertyValue('--c-double').trim();
+
+  if (!ds.chartPts.length) return;
+  const pts = [...ds.chartPts];
+  if (ds.lastVal !== null) pts.push({ time: now, value: ds.lastVal, extra: ds.lastExtra || {} });
+
+  const isButton = dm.deviceType === 'button';
+
+  if (isButton) {
+    // 4 rows: RELEASED · PRESSED · HELD · DOUBLE
+    const bandH   = plotH * 0.20;
+    const bandGap = plotH * 0.067;
+    const BANDS = [
+      { label: dm.labelInactive, color: cClosed, y: padTop + 0 * (bandH + bandGap) },
+      { label: dm.labelActive,   color: cOpen,   y: padTop + 1 * (bandH + bandGap) },
+      { label: 'HELD',           color: cHeld,   y: padTop + 2 * (bandH + bandGap) },
+      { label: 'DOUBLE',         color: cDouble, y: padTop + 3 * (bandH + bandGap) },
+    ];
+
+    ctx.textAlign = 'right'; ctx.font = `bold ${fontSize}px system-ui`;
+    for (const b of BANDS) {
+      ctx.fillStyle = b.color;
+      ctx.fillText(b.label, padLeft - 6, b.y + bandH / 2 + 4);
+    }
+
+    for (let i = 0; i < pts.length - 1; i++) {
+      const t1 = Math.max(now - WINDOW_MS, pts[i].time);
+      const t2 = Math.min(now,             pts[i + 1].time);
+      if (t2 <= t1) continue;
+      const x1 = padLeft + ((t1 - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
+      const x2 = padLeft + ((t2 - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
+      const w   = Math.max(x2 - x1, 1.5);
+      const ex  = pts[i].extra || {};
+      const b   = pts[i].value === 1 ? BANDS[0]
+                : ex.held            ? BANDS[2]
+                : ex.double          ? BANDS[3]
+                :                      BANDS[1];
+      ctx.fillStyle = b.color + 'bb'; ctx.strokeStyle = b.color; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.roundRect(x1, b.y, w, bandH, 4); ctx.fill(); ctx.stroke();
+    }
+  } else {
+    // 2 rows: INACTIVE · ACTIVE
+    const bandH   = plotH * 0.34;
+    const bandGap = plotH * 0.16;
+    const closedY = padTop;
+    const openY   = padTop + bandH + bandGap;
+
+    ctx.textAlign = 'right'; ctx.font = `bold ${fontSize}px system-ui`;
+    ctx.fillStyle = cClosed; ctx.fillText(dm.labelInactive, padLeft - 6, closedY + bandH / 2 + 4);
+    ctx.fillStyle = cOpen;   ctx.fillText(dm.labelActive,   padLeft - 6, openY   + bandH / 2 + 4);
+
+    for (let i = 0; i < pts.length - 1; i++) {
+      const t1 = Math.max(now - WINDOW_MS, pts[i].time);
+      const t2 = Math.min(now,             pts[i + 1].time);
+      if (t2 <= t1) continue;
+      const x1 = padLeft + ((t1 - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
+      const x2 = padLeft + ((t2 - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
+      const w  = Math.max(x2 - x1, 1.5);
+      const isAct = pts[i].value === 0;
+      const bY    = isAct ? openY : closedY;
+      const color = isAct ? cOpen : cClosed;
+      ctx.fillStyle = color + 'bb'; ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.roundRect(x1, bY, w, bandH, 4); ctx.fill(); ctx.stroke();
+    }
+  }
+}
+
+function drawAnalogChart(eui, ctx, W, H, plotW, plotH, padLeft, padTop, padBot, fontSize, cLabel, now, dark, cs) {
+  const ds = deviceStates[eui];
+  const dm = deviceMeta[eui];
+  if (!ds.chartPts.length) return;
+
+  // Gyro/tilt: draw 3 colored lines (X, Y, Z)
+  if (dm.deviceType === 'tilt') {
+    const pts = ds.chartPts.filter(p => p.x !== undefined);
+    if (!pts.length) return;
+
+    const allVals = pts.flatMap(p => [p.x, p.y, p.z]);
+    let yMin = Math.min(...allVals), yMax = Math.max(...allVals);
+    const range = yMax - yMin;
+    if (range < 2) { yMin -= 2; yMax += 2; }
+    else           { yMin -= range * 0.1; yMax += range * 0.1; }
+
+    ctx.textAlign = 'right'; ctx.font = `${fontSize}px system-ui`;
+    ctx.fillStyle = cLabel;
+    const ySteps = 4;
+    for (let i = 0; i <= ySteps; i++) {
+      const frac = i / ySteps;
+      const val  = yMax - frac * (yMax - yMin);
+      const y    = padTop + frac * plotH;
+      ctx.fillText(val.toFixed(1) + '°', padLeft - 4, y + fontSize * 0.35);
+    }
+
+    const AXES = [
+      { key: 'x', color: dark ? '#ff6b6b' : '#c0392b', label: 'X' },
+      { key: 'y', color: dark ? '#74b9ff' : '#2471a3', label: 'Y' },
+      { key: 'z', color: dark ? '#55efc4' : '#1e8449', label: 'Z' },
+    ];
+
+    for (const ax of AXES) {
+      ctx.strokeStyle = ax.color; ctx.lineWidth = 2;
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.beginPath();
+      let started = false;
+      for (const pt of pts) {
+        const x = padLeft + ((pt.time - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
+        const y = padTop  + ((yMax - pt[ax.key]) / (yMax - yMin)) * plotH;
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else            ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    // Legend: X Y Z color swatches
+    const legX = padLeft + 8, legY = padTop + 14;
+    AXES.forEach((ax, i) => {
+      const lx = legX + i * 48;
+      ctx.fillStyle = ax.color;
+      ctx.fillRect(lx, legY - 8, 14, 4);
+      ctx.font = `bold ${fontSize}px system-ui`;
+      ctx.textAlign = 'left';
+      ctx.fillText(ax.label, lx + 18, legY);
+    });
+    return;
+  }
+
+  // Regular single-line analog chart
+  const pts = ds.chartPts.filter(p => p.rawValue !== undefined && p.rawValue !== null);
+  if (!pts.length) return;
+
+  let yMin = Math.min(...pts.map(p => p.rawValue));
+  let yMax = Math.max(...pts.map(p => p.rawValue));
+  const range = yMax - yMin;
+  if (range < 1) { yMin -= 1; yMax += 1; }
+  else           { yMin -= range * 0.1; yMax += range * 0.1; }
+
+  const cLine = cs.getPropertyValue('--md-primary').trim();
+  const unit  = ds.lastUnit || '';
+
+  ctx.textAlign = 'right'; ctx.font = `${fontSize}px system-ui`;
+  ctx.fillStyle = cLabel;
+  const ySteps = 4;
+  for (let i = 0; i <= ySteps; i++) {
+    const frac = i / ySteps;
+    const val  = yMax - frac * (yMax - yMin);
+    const y    = padTop + frac * plotH;
+    ctx.fillText(val.toFixed(1) + unit, padLeft - 4, y + fontSize * 0.35);
+  }
+
+  ctx.strokeStyle = cLine; ctx.lineWidth = 2.5;
+  ctx.lineJoin    = 'round'; ctx.lineCap = 'round';
+  ctx.beginPath();
+  let started = false;
+  for (const pt of pts) {
+    const x = padLeft + ((pt.time - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
+    const y = padTop  + ((yMax - pt.rawValue) / (yMax - yMin)) * plotH;
+    if (!started) { ctx.moveTo(x, y); started = true; }
+    else            ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  if (pts.length >= 2) {
+    const x0 = padLeft + ((pts[0].time - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
+    const xN = padLeft + ((pts[pts.length-1].time - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
+    ctx.lineTo(xN, padTop + plotH);
+    ctx.lineTo(x0, padTop + plotH);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, padTop, 0, padTop + plotH);
+    grad.addColorStop(0, cLine + '55');
+    grad.addColorStop(1, cLine + '00');
+    ctx.fillStyle = grad;
+    ctx.fill();
+  }
+}
+
+// ── Device type application ────────────────────────────────────────────────
+// Three display modes depending on type:
+//   binary  — ring + state text + binary stats (door, motion, button, generic)
+//   analog  — big numeric value + analog stats + filled-area chart (temp, sound)
+//   gyro    — X/Y/Z axis values + per-axis stats + 3-line colored chart (tilt)
+function applyDeviceType(eui, type) {
+  const ws = deviceWidgets[eui];
+  const dm = deviceMeta[eui];
+  if (!ws) return;
+
+  const prof   = typeProfile(type);
+  const analog = prof.analog;
+  const isGyro = type === 'tilt';
+
+  // Update icons in the widget header and the large status ring.
+  ws.widgetIcon.innerHTML     = iconSVG(prof.icon, 22);
+  ws.statusIconCont.innerHTML = iconSVG(prof.icon, 72);
+
+  // Byte-offset config buttons live in the app bar (not per-widget), so only
+  // update them when we're processing the currently selected device.
+  if (eui === selectedEUI) {
+    const cfgBtn    = document.getElementById('tilt-cfg-btn');
+    const tcfgBtn   = document.getElementById('temp-cfg-btn');
+    const bcfgBtn   = document.getElementById('button-cfg-btn');
+    const expireBtn = document.getElementById('button-expire-btn');
+    if (cfgBtn)    cfgBtn.style.display    = isGyro                ? '' : 'none';
+    if (tcfgBtn)   tcfgBtn.style.display   = type === 'temperature' ? '' : 'none';
+    if (bcfgBtn)   bcfgBtn.style.display   = type === 'button'      ? '' : 'none';
+    if (expireBtn) expireBtn.style.display = type === 'button'      ? '' : 'none';
+  }
+
+  // Status panel: binary ring/text vs analog number vs gyro axes.
+  ws.statusRing.style.display    = analog           ? 'none' : '';
+  ws.statusText.style.display    = analog           ? 'none' : '';
+  ws.analogDisplay.style.display = analog && !isGyro ? ''    : 'none';
+  ws.gyroDisplay.style.display   = isGyro            ? ''    : 'none';
+
+  // Stats panel: binary counts vs analog min/max/avg vs gyro axes.
+  ws.statsBinary.style.display = analog           ? 'none' : '';
+  ws.statsAnalog.style.display = analog && !isGyro ? ''    : 'none';
+  ws.statsGyro.style.display   = isGyro            ? ''    : 'none';
+  // Holds/doubles tiles only apply to button devices.
+  const btnOnly = type === 'button';
+  if (ws.stHoldsTile)   ws.stHoldsTile.style.display   = btnOnly ? '' : 'none';
+  if (ws.stDoublesTile) ws.stDoublesTile.style.display = btnOnly ? '' : 'none';
+
+  // Chart legend only makes sense for binary types (shows active/inactive labels).
+  if (ws.chartLegend) {
+    ws.chartLegend.style.display = analog ? 'none' : '';
+    if (!analog && dm) {
+      const la = dm.labelActive || 'ACTIVE', li = dm.labelInactive || 'INACTIVE';
+      if (type === 'button') {
+        ws.chartLegend.innerHTML =
+          `<div class="legend-item"><div class="legend-pip" style="background:var(--c-closed)"></div>${escHtml(li)}</div>` +
+          `<div class="legend-item"><div class="legend-pip" style="background:var(--c-open)"></div>${escHtml(la)}</div>` +
+          `<div class="legend-item"><div class="legend-pip" style="background:var(--c-held)"></div>HELD</div>` +
+          `<div class="legend-item"><div class="legend-pip" style="background:var(--c-double)"></div>DOUBLE</div>`;
+      } else {
+        ws.chartLegend.innerHTML =
+          `<div class="legend-item"><div class="legend-pip" style="background:var(--c-closed)"></div>${escHtml(li)}</div>` +
+          `<div class="legend-item"><div class="legend-pip" style="background:var(--c-open)"></div>${escHtml(la)}</div>`;
+      }
+    }
+  }
+
+  if (dm) {
+    dm.deviceType = type;
+    dm.isAnalog   = analog;
+  }
+}
+
+function updateTypeSelector(eui) {
+  const sel    = document.getElementById('device-type-select');
+  const dm     = eui ? deviceMeta[eui] : null;
+  sel.disabled = !eui;
+  if (!eui || !dm) { sel.value = ''; return; }
+
+  // Populate if needed
+  if (sel.options.length <= 1) {
+    const TYPES = ['door','motion','tilt','button','temperature','sound','generic'];
+    TYPES.forEach(t => {
+      const opt   = document.createElement('option');
+      opt.value   = t;
+      opt.text    = typeProfile(t).display;
+      sel.appendChild(opt);
+    });
+  }
+  sel.value = dm.deviceType || 'generic';
+}
+
+async function onTypeSelectChange() {
+  if (!selectedEUI) return;
+  const type = document.getElementById('device-type-select').value;
+  if (!type) return;
+  try {
+    const resp = await fetch('/set_device_type', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ devEUI: selectedEUI, device_type: type }),
+    });
+    if (!resp.ok) console.warn('set_device_type failed', resp.status);
+  } catch (err) {
+    console.error('set_device_type error', err);
+  }
+}
+
+// ── Tilt byte config dialog ────────────────────────────────────────────────
+let tiltByteConfig = { x: 5, y: 7, z: 9 };
+
+async function fetchTiltByteConfig() {
+  try {
+    const resp = await fetch('/tilt_byte_config');
+    if (resp.ok) tiltByteConfig = await resp.json();
+  } catch (_) {}
+}
+
+function updateTiltPreview(axis) {
+  const inp  = document.getElementById(`tc-${axis}`);
+  const prev = document.getElementById(`tc-${axis}-preview`);
+  const n    = parseInt(inp.value);
+  prev.textContent = isNaN(n) ? 'invalid' : `bytes ${n}–${n + 1}`;
+}
+
+function openTiltConfigDialog() {
+  document.getElementById('tc-x').value = tiltByteConfig.x;
+  document.getElementById('tc-y').value = tiltByteConfig.y;
+  document.getElementById('tc-z').value = tiltByteConfig.z;
+  ['x', 'y', 'z'].forEach(updateTiltPreview);
+  const msg = document.getElementById('tc-msg');
+  msg.className = 'dialog-msg';
+  msg.textContent = '';
+  document.getElementById('tc-submit').disabled = false;
+  document.getElementById('tilt-config-dialog').showModal();
+}
+
+function closeTiltConfigDialog() {
+  document.getElementById('tilt-config-dialog').close();
+}
+
+async function saveTiltByteConfig() {
+  const x = parseInt(document.getElementById('tc-x').value);
+  const y = parseInt(document.getElementById('tc-y').value);
+  const z = parseInt(document.getElementById('tc-z').value);
+
+  const msg = document.getElementById('tc-msg');
+  if ([x, y, z].some(v => isNaN(v) || v < 0 || v > 60)) {
+    msg.className = 'dialog-msg error';
+    msg.textContent = 'Each offset must be a number between 0 and 60.';
+    return;
+  }
+
+  const btn = document.getElementById('tc-submit');
+  btn.disabled = true;
+  msg.className = 'dialog-msg';
+  msg.textContent = '';
+
+  try {
+    const resp = await fetch('/set_tilt_byte_config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ x, y, z }),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      tiltByteConfig = { x: data.x, y: data.y, z: data.z };
+      closeTiltConfigDialog();
+    } else {
+      msg.className = 'dialog-msg error';
+      msg.textContent = data.error || 'Failed to save.';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    msg.className = 'dialog-msg error';
+    msg.textContent = 'Network error — could not reach server.';
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('tilt-config-dialog').addEventListener('click', e => {
+  if (e.target === document.getElementById('tilt-config-dialog')) closeTiltConfigDialog();
+});
+
+// ── Temp/humidity byte config dialog ──────────────────────────────────────
+let tempByteConfig = { temp_start:2, temp_divisor:10, humid_start:6, humid_size:1, humid_divisor:2, little_endian:true };
+
+async function fetchTempByteConfig() {
+  try {
+    const resp = await fetch('/temp_byte_config');
+    if (resp.ok) tempByteConfig = await resp.json();
+  } catch (_) {}
+}
+
+function updateTempPreview() {
+  const ts = parseInt(document.getElementById('tcc-ts').value);
+  const hs = parseInt(document.getElementById('tcc-hs').value);
+  const hz = parseInt(document.getElementById('tcc-hz').value);
+  document.getElementById('tcc-tp').textContent =
+    isNaN(ts) ? 'invalid' : `bytes ${ts}–${ts + 1}`;
+  document.getElementById('tcc-hp').textContent =
+    isNaN(hs) ? 'invalid' : hz === 1 ? `byte ${hs}` : `bytes ${hs}–${hs + 1}`;
+}
+
+function openTempConfigDialog() {
+  const c = tempByteConfig;
+  document.getElementById('tcc-ts').value = c.temp_start;
+  document.getElementById('tcc-td').value = c.temp_divisor;
+  document.getElementById('tcc-hs').value = c.humid_start;
+  document.getElementById('tcc-hz').value = String(c.humid_size);
+  document.getElementById('tcc-hd').value = c.humid_divisor;
+  document.getElementById('tcc-le').value = String(c.little_endian);
+  updateTempPreview();
+  const msg = document.getElementById('tcc-msg');
+  msg.className = 'dialog-msg'; msg.textContent = '';
+  document.getElementById('tcc-submit').disabled = false;
+  document.getElementById('temp-config-dialog').showModal();
+}
+
+function closeTempConfigDialog() {
+  document.getElementById('temp-config-dialog').close();
+}
+
+async function saveTempByteConfig() {
+  const temp_start    = parseInt(document.getElementById('tcc-ts').value);
+  const temp_divisor  = parseFloat(document.getElementById('tcc-td').value);
+  const humid_start   = parseInt(document.getElementById('tcc-hs').value);
+  const humid_size    = parseInt(document.getElementById('tcc-hz').value);
+  const humid_divisor = parseFloat(document.getElementById('tcc-hd').value);
+  const little_endian = document.getElementById('tcc-le').value === 'true';
+
+  const msg = document.getElementById('tcc-msg');
+  if ([temp_start, humid_start].some(v => isNaN(v) || v < 0 || v > 60)) {
+    msg.className = 'dialog-msg error';
+    msg.textContent = 'Start bytes must be 0–60.'; return;
+  }
+  if ([temp_divisor, humid_divisor].some(v => isNaN(v) || v <= 0)) {
+    msg.className = 'dialog-msg error';
+    msg.textContent = 'Divisors must be positive numbers.'; return;
+  }
+
+  const btn = document.getElementById('tcc-submit');
+  btn.disabled = true; msg.className = 'dialog-msg'; msg.textContent = '';
+
+  try {
+    const resp = await fetch('/set_temp_byte_config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ temp_start, temp_divisor, humid_start, humid_size, humid_divisor, little_endian }),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      tempByteConfig = { temp_start: data.temp_start, temp_divisor: data.temp_divisor,
+                         humid_start: data.humid_start, humid_size: data.humid_size,
+                         humid_divisor: data.humid_divisor, little_endian: data.little_endian };
+      closeTempConfigDialog();
+    } else {
+      msg.className = 'dialog-msg error';
+      msg.textContent = data.error || 'Failed to save.';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    msg.className = 'dialog-msg error';
+    msg.textContent = 'Network error — could not reach server.';
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('temp-config-dialog').addEventListener('click', e => {
+  if (e.target === document.getElementById('temp-config-dialog')) closeTempConfigDialog();
+});
+
+// ── Button byte config dialog ──────────────────────────────────────────────
+let buttonByteConfig = { check_byte: -1, hold_value: 2, double_value: 3 };
+
+async function fetchButtonByteConfig() {
+  try {
+    const resp = await fetch('/button_byte_config');
+    if (resp.ok) buttonByteConfig = await resp.json();
+  } catch (_) {}
+}
+
+function updateButtonPreview() {
+  const n    = parseInt(document.getElementById('bc-byte').value);
+  const prev = document.getElementById('bc-preview');
+  prev.textContent = isNaN(n) ? 'invalid' : n === -1 ? 'last byte' : `byte ${n}`;
+}
+
+function openButtonConfigDialog() {
+  document.getElementById('bc-byte').value   = buttonByteConfig.check_byte;
+  document.getElementById('bc-hold').value   = buttonByteConfig.hold_value;
+  document.getElementById('bc-double').value = buttonByteConfig.double_value ?? 3;
+  updateButtonPreview();
+  const msg = document.getElementById('bc-msg');
+  msg.className = 'dialog-msg'; msg.textContent = '';
+  document.getElementById('bc-submit').disabled = false;
+  document.getElementById('button-config-dialog').showModal();
+}
+
+function closeButtonConfigDialog() {
+  document.getElementById('button-config-dialog').close();
+}
+
+async function saveButtonByteConfig() {
+  const check_byte   = parseInt(document.getElementById('bc-byte').value);
+  const hold_value   = parseInt(document.getElementById('bc-hold').value);
+  const double_value = parseInt(document.getElementById('bc-double').value);
+
+  const msg = document.getElementById('bc-msg');
+  if (isNaN(check_byte) || check_byte < -1 || check_byte > 60) {
+    msg.className = 'dialog-msg error';
+    msg.textContent = 'Check byte must be −1 (last) or 0–60.'; return;
+  }
+  if (isNaN(hold_value) || hold_value < 1 || hold_value > 255) {
+    msg.className = 'dialog-msg error';
+    msg.textContent = 'Hold value must be 1–255.'; return;
+  }
+  if (isNaN(double_value) || double_value < 1 || double_value > 255) {
+    msg.className = 'dialog-msg error';
+    msg.textContent = 'Double press value must be 1–255.'; return;
+  }
+
+  const btn = document.getElementById('bc-submit');
+  btn.disabled = true; msg.className = 'dialog-msg'; msg.textContent = '';
+
+  try {
+    const resp = await fetch('/set_button_byte_config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ check_byte, hold_value, double_value }),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      buttonByteConfig = { check_byte: data.check_byte, hold_value: data.hold_value, double_value: data.double_value };
+      closeButtonConfigDialog();
+    } else {
+      msg.className = 'dialog-msg error';
+      msg.textContent = data.error || 'Failed to save.';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    msg.className = 'dialog-msg error';
+    msg.textContent = 'Network error — could not reach server.';
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('button-config-dialog').addEventListener('click', e => {
+  if (e.target === document.getElementById('button-config-dialog')) closeButtonConfigDialog();
+});
+
+// ── Button expiry timer dialog ─────────────────────────────────────────────
+let buttonExpireMs = 1000;   // mirrors _button_expire_seconds on the server
+
+async function fetchButtonExpireSeconds() {
+  try {
+    const resp = await fetch('/button_expire_seconds');
+    if (resp.ok) {
+      const data = await resp.json();
+      buttonExpireMs = Math.round(data.seconds * 1000);
+    }
+  } catch (_) {}
+}
+
+function openButtonExpireDialog() {
+  document.getElementById('be-seconds').value = (buttonExpireMs / 1000).toFixed(1);
+  const msg = document.getElementById('be-msg');
+  msg.className = 'dialog-msg'; msg.textContent = '';
+  document.getElementById('be-submit').disabled = false;
+  document.getElementById('button-expire-dialog').showModal();
+}
+
+function closeButtonExpireDialog() {
+  document.getElementById('button-expire-dialog').close();
+}
+
+async function saveButtonExpireSeconds() {
+  const seconds = parseFloat(document.getElementById('be-seconds').value);
+  const msg = document.getElementById('be-msg');
+  if (isNaN(seconds) || seconds < 0.1 || seconds > 3600) {
+    msg.className = 'dialog-msg error';
+    msg.textContent = 'Expiry must be between 0.1 and 3600 seconds.'; return;
+  }
+
+  const btn = document.getElementById('be-submit');
+  btn.disabled = true; msg.className = 'dialog-msg'; msg.textContent = '';
+
+  try {
+    const resp = await fetch('/set_button_expire_seconds', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seconds }),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      buttonExpireMs = Math.round(data.seconds * 1000);
+      closeButtonExpireDialog();
+    } else {
+      msg.className = 'dialog-msg error';
+      msg.textContent = data.error || 'Failed to save.';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    msg.className = 'dialog-msg error';
+    msg.textContent = 'Network error — could not reach server.';
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('button-expire-dialog').addEventListener('click', e => {
+  if (e.target === document.getElementById('button-expire-dialog')) closeButtonExpireDialog();
+});
+
+// ── Grid coordinate system ─────────────────────────────────────────────────
+function getTrackSizes() {
+  const s   = getComputedStyle(dom.grid);
+  const gap = parseFloat(s.columnGap) || 16;
+  return { trackW: BASE_CELL + gap, trackH: BASE_CELL + gap, padL: parseFloat(s.paddingLeft) || 24, padT: parseFloat(s.paddingTop) || 24 };
+}
+
+function cellFromMouse(e) {
+  const rect = dom.grid.getBoundingClientRect();
+  const zoom = parseFloat(dom.grid.style.zoom) || 1;
+  const { trackW, trackH, padL, padT } = getTrackSizes();
+  return {
+    col: Math.max(1, Math.floor(((e.clientX - rect.left) / zoom - padL) / trackW) + 1),
+    row: Math.max(1, Math.floor(((e.clientY - rect.top)  / zoom - padT) / trackH) + 1),
+  };
+}
+
+function parseGridPos(widget) {
+  const cm = (widget.style.gridColumn || '').match(/(\d+)\s*\/\s*span\s+(\d+)/);
+  const rm = (widget.style.gridRow    || '').match(/(\d+)\s*\/\s*span\s+(\d+)/);
+  return {
+    colStart: cm ? parseInt(cm[1]) : 1, colSpan: cm ? parseInt(cm[2]) : 8,
+    rowStart: rm ? parseInt(rm[1]) : 1, rowSpan: rm ? parseInt(rm[2]) : 8,
+  };
+}
+
+// Standard AABB overlap test for two grid-placed rectangles.
+function overlaps(aCs, aCsp, aRs, aRsp, bCs, bCsp, bRs, bRsp) {
+  return aCs < bCs + bCsp && aCs + aCsp > bCs && aRs < bRs + bRsp && aRs + aRsp > bRs;
+}
+
+// Returns true if placing a widget at (colStart, rowStart) with the given
+// spans would collide with any visible widget other than `exclude`.
+function wouldOverlap(exclude, colStart, colSpan, rowStart, rowSpan) {
+  for (const w of document.querySelectorAll('.widget')) {
+    if (w === exclude || w.style.display === 'none') continue;
+    const p = parseGridPos(w);
+    if (overlaps(colStart, colSpan, rowStart, rowSpan, p.colStart, p.colSpan, p.rowStart, p.rowSpan)) return true;
+  }
+  return false;
+}
+
+// ── Drop ghost ─────────────────────────────────────────────────────────────
+const ghost = document.getElementById('drop-ghost');
+
+// ── Drag & Drop ────────────────────────────────────────────────────────────
+let dragSrc = null, dragColSpan = 8, dragRowSpan = 8, dragColOffset = 0, dragRowOffset = 0;
+
+function attachDragListeners(w) {
+  w.addEventListener('dragstart', e => {
+    if (e.target.closest('.resize-handle')) { e.preventDefault(); return; }
+    dragSrc = w;
+    const pos = parseGridPos(w);
+    dragColSpan = pos.colSpan; dragRowSpan = pos.rowSpan;
+    const { col, row } = cellFromMouse(e);
+    dragColOffset = Math.max(0, Math.min(dragColSpan - 1, col - pos.colStart));
+    dragRowOffset = Math.max(0, Math.min(dragRowSpan - 1, row - pos.rowStart));
+    ghost.style.gridColumn = `span ${dragColSpan}`;
+    ghost.style.gridRow    = `span ${dragRowSpan}`;
+    w.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  w.addEventListener('dragend', () => {
+    w.classList.remove('dragging');
+    ghost.style.display = 'none';
+    dragSrc = null;
+  });
+}
+
+dom.grid.addEventListener('dragover', e => {
+  e.preventDefault();
+  if (!dragSrc) return;
+  e.dataTransfer.dropEffect = 'move';
+  const { col, row } = cellFromMouse(e);
+  const c   = Math.min(Math.max(1, col - dragColOffset), GRID_COLS - dragColSpan + 1);
+  const r   = Math.max(1, row - dragRowOffset);
+  const bad = wouldOverlap(dragSrc, c, dragColSpan, r, dragRowSpan);
+  ghost.style.display    = '';
+  ghost.style.gridColumn = `${c} / span ${dragColSpan}`;
+  ghost.style.gridRow    = `${r} / span ${dragRowSpan}`;
+  ghost.classList.toggle('invalid', bad);
+});
+
+dom.grid.addEventListener('drop', e => {
+  e.preventDefault();
+  ghost.style.display = 'none';
+  if (!dragSrc) return;
+  const { col, row } = cellFromMouse(e);
+  const c = Math.min(Math.max(1, col - dragColOffset), GRID_COLS - dragColSpan + 1);
+  const r = Math.max(1, row - dragRowOffset);
+  if (wouldOverlap(dragSrc, c, dragColSpan, r, dragRowSpan)) return;
+  dragSrc.style.gridColumn = `${c} / span ${dragColSpan}`;
+  dragSrc.style.gridRow    = `${r} / span ${dragRowSpan}`;
+  saveLayout();
+});
+
+// ── Resize ─────────────────────────────────────────────────────────────────
+function attachResizeListener(widget) {
+  widget.querySelector('.resize-handle').addEventListener('mousedown', e => {
+    e.preventDefault(); e.stopPropagation();
+    widget.setAttribute('draggable', 'false');
+    widget.classList.add('is-resizing');
+    const { trackW, trackH } = getTrackSizes();
+    const rect     = widget.getBoundingClientRect();
+    const startX   = e.clientX, startY = e.clientY;
+    const startW   = rect.width, startH = rect.height;
+    const pos      = parseGridPos(widget);
+    const startCol = pos.colStart, startRow = pos.rowStart;
+
+    function onMove(e) {
+      let cols = Math.max(2, Math.min(GRID_COLS - startCol + 1, Math.round((startW + e.clientX - startX) / currentScale / trackW)));
+      let rows = Math.max(2, Math.round((startH + e.clientY - startY) / currentScale / trackH));
+      while (cols > 2 && wouldOverlap(widget, startCol, cols, startRow, rows)) cols--;
+      while (rows > 2 && wouldOverlap(widget, startCol, cols, startRow, rows)) rows--;
+      if (!wouldOverlap(widget, startCol, cols, startRow, rows)) {
+        widget.style.gridColumn = `${startCol} / span ${cols}`;
+        widget.style.gridRow    = `${startRow} / span ${rows}`;
+      }
+    }
+    function onUp() {
+      widget.setAttribute('draggable', 'true');
+      widget.classList.remove('is-resizing');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+      saveLayout();
+      if (selectedEUI) drawChart(selectedEUI);
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+  });
+}
+
+// ── Layout persistence ─────────────────────────────────────────────────────
+// Widget positions are saved to localStorage keyed by device EUI so each
+// device remembers its own layout independently.
+const DEFAULT_DEVICE_LAYOUT = [
+  { key: 'wStatus', col: '1 / span 8',   row: '1 / span 8' },
+  { key: 'wStats',  col: '9 / span 6',   row: '1 / span 8' },
+  { key: 'wChart',  col: '15 / span 10', row: '1 / span 8' },
+  { key: 'wLog',    col: '1 / span 24',  row: '9 / span 8' },
+];
+
+function applyDeviceLayout(eui) {
+  const ws = deviceWidgets[eui];
+  if (!ws) return;
+  const raw = localStorage.getItem(LAYOUT_KEY);
+  // Inline safe-parse: returns {} if the stored string is missing or corrupt.
+  const all = raw ? (() => { try { return JSON.parse(raw); } catch(_){return {};} })() : {};
+  const devL = all[eui] || {};
+
+  const map = { wStatus: ws.wStatus, wStats: ws.wStats, wChart: ws.wChart, wLog: ws.wLog };
+  DEFAULT_DEVICE_LAYOUT.forEach(({ key, col, row }) => {
+    const w   = map[key];
+    const cfg = devL[key] || {};
+    w.style.gridColumn = cfg.col || col;
+    w.style.gridRow    = cfg.row || row;
+  });
+}
+
+function saveLayout() {
+  const raw = localStorage.getItem(LAYOUT_KEY);
+  const all = raw ? (() => { try { return JSON.parse(raw); } catch(_){return {};} })() : {};
+
+  Object.keys(deviceWidgets).forEach(eui => {
+    const ws = deviceWidgets[eui];
+    all[eui] = {
+      wStatus: { col: ws.wStatus.style.gridColumn, row: ws.wStatus.style.gridRow },
+      wStats:  { col: ws.wStats.style.gridColumn,  row: ws.wStats.style.gridRow  },
+      wChart:  { col: ws.wChart.style.gridColumn,  row: ws.wChart.style.gridRow  },
+      wLog:    { col: ws.wLog.style.gridColumn,    row: ws.wLog.style.gridRow    },
+    };
+  });
+  localStorage.setItem(LAYOUT_KEY, JSON.stringify(all));
+}
+
+// ── 1-second ticker ────────────────────────────────────────────────────────
+// Keeps "state age" timers and the rolling chart current even when no new
+// sensor events arrive.
+setInterval(() => {
+  updateStatsDuration();
+  if (selectedEUI) drawChart(selectedEUI);
+}, 1000);
+
+// ── Grid layout engine ─────────────────────────────────────────────────────
+// Recalculates how many columns/rows the CSS grid needs to fill the viewport
+// at the current zoom level. A phantom element forces the grid to be tall
+// enough that you can scroll into empty space below existing widgets.
+function syncGridRows() {
+  const s      = getComputedStyle(dom.grid);
+  const padL   = parseFloat(s.paddingLeft)   || 24;
+  const padR   = parseFloat(s.paddingRight)  || 24;
+  const padT   = parseFloat(s.paddingTop)    || 24;
+  const padB   = parseFloat(s.paddingBottom) || 24;
+  const gap    = parseFloat(s.columnGap)     || 16;
+  const trackW = BASE_CELL + gap;
+
+  const vw = window.innerWidth  / currentScale;
+  const vh = (window.innerHeight - 64) / currentScale;
+
+  GRID_COLS     = Math.max(24, Math.ceil((vw - padL - padR + gap) / trackW) + 2);
+  const minRows = Math.max(16, Math.ceil((vh - padT - padB + gap) / trackW) + 2);
+
+  dom.grid.style.gridTemplateColumns = `repeat(${GRID_COLS}, ${BASE_CELL}px)`;
+  dom.grid.style.gridAutoRows        = `${BASE_CELL}px`;
+
+  let ph = document.getElementById('grid-phantom');
+  if (!ph) {
+    ph = document.createElement('div');
+    ph.id = 'grid-phantom';
+    ph.style.cssText = 'pointer-events:none; visibility:hidden;';
+    dom.grid.appendChild(ph);
+  }
+  ph.style.gridColumn = '1 / span 1';
+  ph.style.gridRow    = `${minRows} / span 1`;
+}
+
+// ── Scale slider ───────────────────────────────────────────────────────────
+function applyScale(pct) {
+  currentScale               = pct / 100;
+  dom.grid.style.zoom        = currentScale;
+  dom.scaleLabel.textContent = pct + '%';
+  syncGridRows();
+  if (selectedEUI) drawChart(selectedEUI);
+  localStorage.setItem(SCALE_KEY, pct);
+}
+
+document.getElementById('scale-slider').addEventListener('input', e => applyScale(parseInt(e.target.value)));
+window.addEventListener('resize', () => { syncGridRows(); if (selectedEUI) drawChart(selectedEUI); });
+
+// ── Log export ─────────────────────────────────────────────────────────────
+function exportLog(eui) {
+  const ds = deviceStates[eui];
+  const dm = deviceMeta[eui];
+  if (!ds || !dm || !ds.log.length) return;
+
+  const header = [
+    'LoRaWAN Dashboard — Event Log',
+    'Device   : ' + dm.name + ' (' + eui + ')',
+    'Exported : ' + new Date().toLocaleString('en-US', { hour12: false }),
+    '='.repeat(60),
+    'Timestamp                    State    Raw  Prev Duration',
+    '-'.repeat(60),
+  ].join('\n');
+
+  const rows = ds.log.map(({ ms, val, prevDurMs, extra }) => {
+    const ts  = new Date(ms).toLocaleString('en-US', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 2 });
+    const baseLabel = val === 0 ? dm.labelActive : dm.labelInactive;
+    const stLabel   = (val === 0 && extra?.held)   ? 'HELD'
+                    : (val === 0 && extra?.double)  ? 'DOUBLE'
+                    : baseLabel;
+    const st  = stLabel.padEnd(8);
+    const dur = prevDurMs != null ? fmtDur(Math.round(prevDurMs / 1000)) : '—';
+    return `${ts}  ${st}  ${val}    ${dur}`;
+  }).join('\n');
+
+  const safeName = dm.name.replace(/[^\w\-]/g, '_');
+  const blob = new Blob([header + '\n' + rows + '\n'], { type: 'text/plain' });
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  a.download = `log-${safeName}-${eui.slice(-8)}.txt`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ── Add Device dialog ──────────────────────────────────────────────────────
+const adDialog = document.getElementById('add-device-dialog');
+
+function openAddDeviceDialog() {
+  document.getElementById('ad-msg').className       = 'dialog-msg';
+  document.getElementById('ad-submit-btn').disabled = false;
+  document.getElementById('ad-submit-btn').innerHTML = ADD_DEVICE_BTN_HTML;
+  adDialog.showModal();
+}
+function closeAddDeviceDialog() { adDialog.close(); }
+
+function onAdModeChange() {
+  const mode = document.getElementById('ad-mode').value;
+  document.getElementById('ad-otaa-fields').style.display = mode === 'OTAA' ? '' : 'none';
+  document.getElementById('ad-abp-fields').style.display  = mode === 'ABP'  ? '' : 'none';
+}
+
+function hexVal(id) { return document.getElementById(id).value.replace(/[\s:]/g, '').toUpperCase(); }
+
+async function submitAddDevice() {
+  const mode    = document.getElementById('ad-mode').value;
+  const devEUI  = hexVal('ad-dev-eui');
+  const appKey  = hexVal('ad-app-key');
+  const joinEUI = hexVal('ad-join-eui');
+  const devAddr = hexVal('ad-dev-addr');
+  const appSKey = hexVal('ad-app-skey');
+  const nwkSKey = hexVal('ad-nwk-skey');
+
+  const errors = [];
+  if (devEUI.length !== 16) errors.push('Device EUI must be 16 hex characters');
+  if (mode === 'OTAA') {
+    if (appKey.length !== 32) errors.push('App Key must be 32 hex characters');
+    if (joinEUI.length !== 0 && joinEUI.length !== 16) errors.push('Join EUI must be empty or 16 hex characters');
+  } else {
+    if (devAddr.length !== 8)  errors.push('Device Address must be 8 hex characters');
+    if (appSKey.length !== 32) errors.push('App Session Key must be 32 hex characters');
+    if (nwkSKey.length !== 32) errors.push('Network Session Key must be 32 hex characters');
+  }
+
+  const msgEl = document.getElementById('ad-msg');
+  if (errors.length) { msgEl.textContent = errors.join(' · '); msgEl.className = 'dialog-msg error'; return; }
+  msgEl.className = 'dialog-msg';
+
+  const btn = document.getElementById('ad-submit-btn');
+  btn.disabled  = true;
+  btn.innerHTML = '<div class="spinner"></div> Adding…';
+
+  const name    = document.getElementById('ad-name').value.trim() || devEUI;
+  const payload = { mode, name, devEUI,
+    lorawanSpec: document.getElementById('ad-lorawan-spec').value,
+    deviceClass: document.getElementById('ad-device-class').value,
+  };
+  if (mode === 'OTAA') { payload.appKey = appKey; payload.joinEUI = joinEUI; }
+  else { payload.devAddr = devAddr; payload.appSKey = appSKey; payload.nwkSKey = nwkSKey; }
+
+  try {
+    const resp = await fetch('/add_device', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const json = await resp.json();
+    if (json.success) {
+      msgEl.textContent = `Device "${name}" added successfully.`;
+      msgEl.className   = 'dialog-msg success';
+      btn.disabled = false;
+      btn.innerHTML = ADD_DEVICE_BTN_HTML;
+    } else {
+      let detail = json.error || 'Unknown error';
+      try { detail = JSON.parse(detail).message || detail; } catch(_) {}
+      msgEl.textContent = 'Error: ' + detail;
+      msgEl.className   = 'dialog-msg error';
+      btn.disabled = false;
+      btn.innerHTML = ADD_DEVICE_BTN_HTML;
+    }
+  } catch (err) {
+    msgEl.textContent = 'Network error: ' + err.message; msgEl.className = 'dialog-msg error';
+    btn.disabled = false;
+    btn.innerHTML = ADD_DEVICE_BTN_HTML;
+  }
+}
+
+adDialog.addEventListener('click', e => { if (e.target === adDialog) closeAddDeviceDialog(); });
+
+// ── Delete Device dialog ───────────────────────────────────────────────────
+const delDialog = document.getElementById('delete-device-dialog');
+
+function openDeleteDialog() {
+  if (!selectedEUI || !deviceMeta[selectedEUI]) return;
+  const name = deviceMeta[selectedEUI].name;
+  document.getElementById('delete-device-prompt').textContent =
+    `Do you want to remove "${name}"?`;
+  document.getElementById('delete-device-err').style.display = 'none';
+  document.getElementById('delete-yes-btn').disabled = false;
+  document.getElementById('delete-yes-btn').textContent = 'Yes, Remove';
+  delDialog.showModal();
+}
+
+function closeDeleteDialog() { delDialog.close(); }
+
+async function confirmDeleteDevice() {
+  const eui = selectedEUI;
+  if (!eui) return;
+  const yesBtn = document.getElementById('delete-yes-btn');
+  const errEl  = document.getElementById('delete-device-err');
+  yesBtn.disabled    = true;
+  yesBtn.textContent = 'Removing…';
+  errEl.style.display = 'none';
+
+  try {
+    const resp = await fetch('/delete_device', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ devEUI: eui }),
+    });
+    const json = await resp.json();
+    if (json.success) {
+      delDialog.close();
+    } else {
+      let detail = json.error || 'Unknown error';
+      try { detail = JSON.parse(detail).message || detail; } catch(_) {}
+      errEl.textContent   = 'Error: ' + detail;
+      errEl.style.display = '';
+      yesBtn.disabled    = false;
+      yesBtn.textContent = 'Yes, Remove';
+    }
+  } catch (err) {
+    errEl.textContent   = 'Network error: ' + err.message;
+    errEl.style.display = '';
+    yesBtn.disabled    = false;
+    yesBtn.textContent = 'Yes, Remove';
+  }
+}
+
+delDialog.addEventListener('click', e => { if (e.target === delDialog) closeDeleteDialog(); });
+
+// ── Boot sequence ──────────────────────────────────────────────────────────
+// Restore zoom level first so the grid calculates the right column count
+// before widgets are placed. Fetch byte configs before opening SSE so the
+// decoders are already calibrated when the first hydration packet arrives.
+const savedPct = parseInt(localStorage.getItem(SCALE_KEY) || '100');
+document.getElementById('scale-slider').value = savedPct;
+applyScale(savedPct);
+dom.noDevMsg.style.display = '';
+fetchTiltByteConfig();
+fetchTempByteConfig();
+fetchButtonByteConfig();
+fetchButtonExpireSeconds();
+connect();
+</script>
+</body>
+</html>
