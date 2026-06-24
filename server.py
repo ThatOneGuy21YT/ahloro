@@ -28,6 +28,7 @@ SSE event protocol:
 """
 
 import datetime
+import decimal
 import json
 import os
 import queue
@@ -46,6 +47,19 @@ import psycopg2.extras
 import psycopg2.pool
 
 import device_classifier
+
+
+class _Encoder(json.JSONEncoder):
+    """Extend the default encoder to handle types psycopg2 can return."""
+    def default(self, o):
+        if isinstance(o, decimal.Decimal):
+            return float(o)
+        return super().default(o)
+
+
+def _json_dumps(obj) -> str:
+    return json.dumps(obj, cls=_Encoder)
+
 
 # ── Gateway / siot credentials ────────────────────────────────────────────────
 GW_HOST  = "10.8.8.8"
@@ -392,7 +406,7 @@ def _load_events_from_db():
         try:
             event_rows = _db_execute(
                 f"""SELECT device_type,
-                           extract(epoch from recorded_at),
+                           extract(epoch from recorded_at)::float8,
                            value, raw_value, unit, extra
                     FROM (
                         SELECT *, ROW_NUMBER() OVER (ORDER BY recorded_at DESC) AS rn
@@ -1061,13 +1075,13 @@ class Handler(BaseHTTPRequestHandler):
                 "history_by_device": hist_by_device,
                 "stats_by_device":   stats_by_device,
             }
-            self.wfile.write(f"data: {json.dumps(hydration)}\n\n".encode())
+            self.wfile.write(f"data: {_json_dumps(hydration)}\n\n".encode())
             self.wfile.flush()
 
             while True:
                 try:
                     event = q.get(timeout=15)
-                    self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
+                    self.wfile.write(f"data: {_json_dumps(event)}\n\n".encode())
                     self.wfile.flush()
                 except queue.Empty:
                     self.wfile.write(b": keepalive\n\n")
@@ -1297,7 +1311,7 @@ class Handler(BaseHTTPRequestHandler):
     # ── Shared response helper ────────────────────────────────────────────────
 
     def _json_response(self, code: int, obj: dict):
-        data = json.dumps(obj).encode()
+        data = _json_dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type",              "application/json")
         self.send_header("Content-Length",            str(len(data)))
