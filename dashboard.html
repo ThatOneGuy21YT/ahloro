@@ -2,8 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=1920, initial-scale=0.5625">
-  <title>LoRaWAN Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DoorSense</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#006874">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="DoorSense">
+  <link rel="apple-touch-icon" href="/icon-192.png">
   <style>
     /* ── Material You M3 colour tokens (seed: #006874 teal) ─────────────────*/
     :root {
@@ -555,7 +561,72 @@
       gap: 16px; color: var(--md-outline); font-size: 16px;
     }
     #no-device-msg svg { opacity: .3; }
+
+    /* ── Desktop: allow horizontal scroll if grid overflows viewport ──── */
+    .grid { overflow-x: auto; }
+
+    /* ── Mobile layout (≤ 768 px) ────────────────────────────────────── */
+    @media (max-width: 768px) {
+      body { overflow-x: hidden; }
+
+      .app-bar {
+        height: auto;
+        min-height: 56px;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px 12px;
+      }
+      .app-bar-title { font-size: 17px; }
+      .app-bar-subtitle,
+      .scale-control { display: none; }
+
+      /* Conn pill stays right on first row */
+      .conn-pill { margin-left: auto; }
+
+      /* Spacer collapses so the control row wraps below */
+      .app-bar-spacer { display: none; }
+
+      /* Widget grid → vertical flex stack */
+      .grid {
+        display: flex !important;
+        flex-direction: column !important;
+        overflow-x: hidden !important;
+        padding: 12px;
+        gap: 12px;
+      }
+
+      /* Override inline grid-column / grid-row from JS */
+      .widget {
+        grid-column: unset !important;
+        grid-row: unset !important;
+        width: 100% !important;
+        height: auto !important;
+        min-height: 260px;
+        cursor: default;
+      }
+      .widget:active { cursor: default; }
+      .widget.dragging { transform: none; opacity: 1; }
+
+      /* Chart canvas needs explicit height since parent is now auto */
+      [id^="w-chart-"] { min-height: 300px; }
+      .chart-wrap      { height: 220px !important; }
+
+      /* Log: fixed scrollable height */
+      .log-wrap { height: 280px; }
+
+      /* Hide drag / resize affordances */
+      .drag-handle,
+      .resize-handle { display: none !important; }
+
+      /* No-device placeholder */
+      #no-device-msg { height: calc(100vh - 120px); }
+    }
   </style>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js');
+    }
+  </script>
 </head>
 <body>
 
@@ -941,6 +1012,8 @@ const WINDOW_MS  = 300000; // rolling chart window in ms
 const LAYOUT_KEY = 'lora-dashboard-layout-v2';
 const SCALE_KEY  = 'lora-dashboard-scale';
 
+function isMobile() { return window.innerWidth <= 768; }
+
 // Reused button label — avoids repeating the long SVG string on every success/error reset.
 const ADD_DEVICE_BTN_HTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> Add Device';
 
@@ -1096,11 +1169,13 @@ function makeWidget(id) {
   const w = document.createElement('div');
   w.className  = 'widget';
   w.id         = id;
-  w.draggable  = true;
+  w.draggable  = !isMobile();
   w.style.display = 'none';
   w.innerHTML  = DRAG_HANDLE_SVG + RESIZE_HANDLE_SVG;
-  attachDragListeners(w);
-  attachResizeListener(w);
+  if (!isMobile()) {
+    attachDragListeners(w);
+    attachResizeListener(w);
+  }
   dom.grid.appendChild(w);
   return w;
 }
@@ -2649,6 +2724,7 @@ const DEFAULT_DEVICE_LAYOUT = [
 ];
 
 function applyDeviceLayout(eui) {
+  if (isMobile()) return;
   const ws = deviceWidgets[eui];
   if (!ws) return;
   const raw = localStorage.getItem(LAYOUT_KEY);
@@ -2694,6 +2770,7 @@ setInterval(() => {
 // at the current zoom level. A phantom element forces the grid to be tall
 // enough that you can scroll into empty space below existing widgets.
 function syncGridRows() {
+  if (isMobile()) return;
   const s      = getComputedStyle(dom.grid);
   const padL   = parseFloat(s.paddingLeft)   || 24;
   const padR   = parseFloat(s.paddingRight)  || 24;
@@ -2724,6 +2801,13 @@ function syncGridRows() {
 
 // ── Scale slider ───────────────────────────────────────────────────────────
 function applyScale(pct) {
+  if (isMobile()) {
+    currentScale = 1;
+    dom.grid.style.zoom = '';
+    syncGridRows();
+    if (selectedEUI) drawChart(selectedEUI);
+    return;
+  }
   currentScale               = pct / 100;
   dom.grid.style.zoom        = currentScale;
   dom.scaleLabel.textContent = pct + '%';
@@ -2733,7 +2817,14 @@ function applyScale(pct) {
 }
 
 document.getElementById('scale-slider').addEventListener('input', e => applyScale(parseInt(e.target.value)));
-window.addEventListener('resize', () => { syncGridRows(); if (selectedEUI) drawChart(selectedEUI); });
+window.addEventListener('resize', () => {
+  if (isMobile()) {
+    dom.grid.style.zoom = '';
+    currentScale = 1;
+  }
+  syncGridRows();
+  if (selectedEUI) drawChart(selectedEUI);
+});
 
 // ── Log export ─────────────────────────────────────────────────────────────
 function exportLog(eui) {
