@@ -255,6 +255,16 @@
       flex-shrink: 0;
     }
     .scale-label { min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; }
+    .scale-apply-btn {
+      background: var(--md-primary-container);
+      color: var(--md-on-primary-container);
+      border: none; border-radius: 14px;
+      padding: 4px 12px;
+      font-size: 12px; font-weight: 500; font-family: inherit;
+      cursor: pointer; transition: filter .15s;
+      white-space: nowrap;
+    }
+    .scale-apply-btn:hover { filter: brightness(.92); }
     #scale-slider {
       -webkit-appearance: none; appearance: none;
       width: 130px; height: 4px;
@@ -698,6 +708,7 @@
     <input type="range" id="scale-slider" min="40" max="200" value="100" step="5">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
     <span class="scale-label" id="scale-label">100%</span>
+    <button id="scale-apply-btn" class="scale-apply-btn" title="Apply scale">Apply</button>
   </div>
 
   <div class="app-bar-subtitle" id="last-seen">—</div>
@@ -2819,7 +2830,12 @@ function applyScale(pct) {
   localStorage.setItem(SCALE_KEY, pct);
 }
 
-document.getElementById('scale-slider').addEventListener('input', e => applyScale(parseInt(e.target.value)));
+// Preview label while dragging; apply only on release or Apply button
+document.getElementById('scale-slider').addEventListener('input', e => {
+  dom.scaleLabel.textContent = e.target.value + '%';
+});
+document.getElementById('scale-slider').addEventListener('change', e => applyScale(parseInt(e.target.value)));
+document.getElementById('scale-apply-btn').addEventListener('click', () => applyScale(parseInt(dom.scaleSlider.value)));
 window.addEventListener('resize', () => {
   if (isMobile()) {
     dom.grid.style.zoom = '';
