@@ -24,6 +24,7 @@ SSE / browser endpoints (unchanged from server.py):
   POST /set_button_expire_seconds
 """
 
+import contextlib
 import datetime
 import decimal
 import json
@@ -116,41 +117,54 @@ def _db_execute(sql: str, params=None, fetch: bool = False):
         _db_pool.putconn(conn)
 
 
+@contextlib.contextmanager
+def _db_cursor():
+    """Single connection for multiple queries in one transaction."""
+    conn = _db_pool.getconn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                yield cur
+    finally:
+        _db_pool.putconn(conn)
+
+
 def _init_db():
-    _db_execute("""
-        CREATE TABLE IF NOT EXISTS device_table_map (
-            dev_eui     TEXT PRIMARY KEY,
-            table_name  TEXT NOT NULL,
-            device_name TEXT
-        )
-    """)
-    _db_execute("""
-        CREATE TABLE IF NOT EXISTS device_stats (
-            dev_eui        TEXT PRIMARY KEY,
-            opens          INTEGER NOT NULL DEFAULT 0,
-            closes         INTEGER NOT NULL DEFAULT 0,
-            holds          INTEGER NOT NULL DEFAULT 0,
-            doubles        INTEGER NOT NULL DEFAULT 0,
-            server_start   DOUBLE PRECISION,
-            last_change_ts DOUBLE PRECISION,
-            min_value      DOUBLE PRECISION,
-            max_value      DOUBLE PRECISION,
-            sum_value      DOUBLE PRECISION NOT NULL DEFAULT 0.0,
-            count_value    INTEGER NOT NULL DEFAULT 0
-        )
-    """)
-    _db_execute("""
-        CREATE TABLE IF NOT EXISTS device_types (
-            dev_eui     TEXT PRIMARY KEY,
-            device_type TEXT NOT NULL
-        )
-    """)
-    _db_execute("""
-        CREATE TABLE IF NOT EXISTS app_config (
-            key   TEXT PRIMARY KEY,
-            value JSONB NOT NULL
-        )
-    """)
+    with _db_cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS device_table_map (
+                dev_eui     TEXT PRIMARY KEY,
+                table_name  TEXT NOT NULL,
+                device_name TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS device_stats (
+                dev_eui        TEXT PRIMARY KEY,
+                opens          INTEGER NOT NULL DEFAULT 0,
+                closes         INTEGER NOT NULL DEFAULT 0,
+                holds          INTEGER NOT NULL DEFAULT 0,
+                doubles        INTEGER NOT NULL DEFAULT 0,
+                server_start   DOUBLE PRECISION,
+                last_change_ts DOUBLE PRECISION,
+                min_value      DOUBLE PRECISION,
+                max_value      DOUBLE PRECISION,
+                sum_value      DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                count_value    INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS device_types (
+                dev_eui     TEXT PRIMARY KEY,
+                device_type TEXT NOT NULL
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS app_config (
+                key   TEXT PRIMARY KEY,
+                value JSONB NOT NULL
+            )
+        """)
     print("Database schema ready.")
 
 
@@ -219,13 +233,13 @@ def _remove_device_from_db(dev_eui: str):
             )
             table = rows[0][0] if rows else None
 
-        if table:
-            _db_execute(f"DROP TABLE IF EXISTS {table}")
-            print(f"Dropped device table: {table}")
-
-        _db_execute("DELETE FROM device_table_map WHERE dev_eui = %s", (dev_eui,))
-        _db_execute("DELETE FROM device_stats   WHERE dev_eui = %s", (dev_eui,))
-        _db_execute("DELETE FROM device_types   WHERE dev_eui = %s", (dev_eui,))
+        with _db_cursor() as cur:
+            if table:
+                cur.execute(f"DROP TABLE IF EXISTS {table}")
+                print(f"Dropped device table: {table}")
+            cur.execute("DELETE FROM device_table_map WHERE dev_eui = %s", (dev_eui,))
+            cur.execute("DELETE FROM device_stats   WHERE dev_eui = %s", (dev_eui,))
+            cur.execute("DELETE FROM device_types   WHERE dev_eui = %s", (dev_eui,))
         _device_type_store.pop(dev_eui, None)
     except Exception as exc:
         print(f"DB remove_device error [{dev_eui}]: {exc}", file=sys.stderr)
@@ -336,10 +350,11 @@ def _load_events_from_db():
                            extract(epoch from recorded_at)::float8,
                            value, raw_value, unit, extra
                     FROM (
-                        SELECT *, ROW_NUMBER() OVER (ORDER BY recorded_at DESC) AS rn
+                        SELECT device_type, recorded_at, value, raw_value, unit, extra
                         FROM {table}
+                        ORDER BY recorded_at DESC
+                        LIMIT 1000
                     ) t
-                    WHERE rn <= 1000
                     ORDER BY recorded_at ASC""",
                 fetch=True,
             )
@@ -432,52 +447,64 @@ def _load_stats_from_db():
             ds["stats"]["server_start"] = now
 
 
-def _persist_stats():
+_last_persist_at: float = 0.0
+
+def _persist_stats(*, immediate: bool = False):
+    global _last_persist_at
+    now = time.time()
+    if not immediate and now - _last_persist_at < 5.0:
+        return
+    _last_persist_at = now
     try:
-        for eui, ds in _device_states.items():
-            with ds["stats_lock"]:
-                st = dict(ds["stats"])
-            _db_execute(
-                """INSERT INTO device_stats
-                       (dev_eui, opens, closes, holds, doubles,
-                        server_start, last_change_ts,
-                        min_value, max_value, sum_value, count_value)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT (dev_eui) DO UPDATE SET
-                       opens=EXCLUDED.opens, closes=EXCLUDED.closes,
-                       holds=EXCLUDED.holds, doubles=EXCLUDED.doubles,
-                       server_start=EXCLUDED.server_start,
-                       last_change_ts=EXCLUDED.last_change_ts,
-                       min_value=EXCLUDED.min_value, max_value=EXCLUDED.max_value,
-                       sum_value=EXCLUDED.sum_value, count_value=EXCLUDED.count_value""",
-                (eui,
-                 st.get("opens", 0),    st.get("closes", 0),
-                 st.get("holds", 0),    st.get("doubles", 0),
-                 st.get("server_start"), st.get("last_change_ts"),
-                 st.get("min_value"),   st.get("max_value"),
-                 st.get("sum_value", 0.0), st.get("count_value", 0)),
-            )
-
-        for eui, dtype in _device_type_store.items():
-            _db_execute(
-                "INSERT INTO device_types (dev_eui, device_type) VALUES (%s,%s) "
-                "ON CONFLICT (dev_eui) DO UPDATE SET device_type=EXCLUDED.device_type",
-                (eui, dtype),
-            )
-
-        for key, value in {
-            "tilt_byte_config":      device_classifier.get_tilt_byte_config(),
-            "temp_byte_config":      device_classifier.get_temp_byte_config(),
-            "button_byte_config":    device_classifier.get_button_byte_config(),
-            "button_expire_seconds": _button_expire_seconds,
-        }.items():
-            _db_execute(
-                "INSERT INTO app_config (key, value) VALUES (%s,%s) "
-                "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
-                (key, psycopg2.extras.Json(value)),
-            )
+        with _db_cursor() as cur:
+            for eui, ds in _device_states.items():
+                with ds["stats_lock"]:
+                    st = dict(ds["stats"])
+                cur.execute(
+                    """INSERT INTO device_stats
+                           (dev_eui, opens, closes, holds, doubles,
+                            server_start, last_change_ts,
+                            min_value, max_value, sum_value, count_value)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT (dev_eui) DO UPDATE SET
+                           opens=EXCLUDED.opens, closes=EXCLUDED.closes,
+                           holds=EXCLUDED.holds, doubles=EXCLUDED.doubles,
+                           server_start=EXCLUDED.server_start,
+                           last_change_ts=EXCLUDED.last_change_ts,
+                           min_value=EXCLUDED.min_value, max_value=EXCLUDED.max_value,
+                           sum_value=EXCLUDED.sum_value, count_value=EXCLUDED.count_value""",
+                    (eui,
+                     st.get("opens", 0),    st.get("closes", 0),
+                     st.get("holds", 0),    st.get("doubles", 0),
+                     st.get("server_start"), st.get("last_change_ts"),
+                     st.get("min_value"),   st.get("max_value"),
+                     st.get("sum_value", 0.0), st.get("count_value", 0)),
+                )
+            for eui, dtype in _device_type_store.items():
+                cur.execute(
+                    "INSERT INTO device_types (dev_eui, device_type) VALUES (%s,%s) "
+                    "ON CONFLICT (dev_eui) DO UPDATE SET device_type=EXCLUDED.device_type",
+                    (eui, dtype),
+                )
+            for key, value in {
+                "tilt_byte_config":      device_classifier.get_tilt_byte_config(),
+                "temp_byte_config":      device_classifier.get_temp_byte_config(),
+                "button_byte_config":    device_classifier.get_button_byte_config(),
+                "button_expire_seconds": _button_expire_seconds,
+            }.items():
+                cur.execute(
+                    "INSERT INTO app_config (key, value) VALUES (%s,%s) "
+                    "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+                    (key, psycopg2.extras.Json(value)),
+                )
     except Exception as exc:
         print(f"DB persist_stats error: {exc}", file=sys.stderr)
+
+
+def _persist_loop():
+    while True:
+        time.sleep(60)
+        _persist_stats(immediate=True)
 
 
 # ── Online-status / device-list helpers ──────────────────────────────────────
@@ -773,10 +800,13 @@ class Handler(BaseHTTPRequestHandler):
         devices_out = []
         for dev in registry_snap:
             eui = dev["devEUI"].upper()
-            ds  = _device_states.get(eui, {})
             out = _build_device_out(dev)
-            with ds.get("stats_lock", threading.Lock()):
-                out["stats"] = dict(ds.get("stats", {}))
+            ds  = _device_states.get(eui)
+            if ds:
+                with ds["stats_lock"]:
+                    out["stats"] = dict(ds["stats"])
+            else:
+                out["stats"] = {}
             devices_out.append(out)
 
         self._json_response(200, {"devices": devices_out})
@@ -852,7 +882,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         _device_type_store[dev_eui] = dtype
-        _persist_stats()
+        _persist_stats(immediate=True)
 
         with _device_registry_lock:
             registry_snap = list(_device_registry)
@@ -875,7 +905,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response(400, {"success": False, "error": "Byte offsets must be 0–60"})
             return
         device_classifier.set_tilt_byte_config(x, y, z)
-        _persist_stats()
+        _persist_stats(immediate=True)
         self._json_response(200, {"success": True, **device_classifier.get_tilt_byte_config()})
 
     def _handle_set_temp_byte_config(self):
@@ -901,7 +931,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         device_classifier.set_temp_byte_config(
             temp_start, temp_divisor, humid_start, humid_size, humid_divisor, little_endian)
-        _persist_stats()
+        _persist_stats(immediate=True)
         self._json_response(200, {"success": True, **device_classifier.get_temp_byte_config()})
 
     def _handle_set_button_byte_config(self):
@@ -921,7 +951,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response(400, {"success": False, "error": "hold/double_value must be 1–255"})
             return
         device_classifier.set_button_byte_config(check_byte, hold_value, double_value)
-        _persist_stats()
+        _persist_stats(immediate=True)
         self._json_response(200, {"success": True, **device_classifier.get_button_byte_config()})
 
     def _handle_set_button_expire_seconds(self):
@@ -937,7 +967,7 @@ class Handler(BaseHTTPRequestHandler):
                                       "error": "seconds must be between 0.1 and 3600."})
             return
         _button_expire_seconds = secs
-        _persist_stats()
+        _persist_stats(immediate=True)
         self._json_response(200, {"success": True, "seconds": _button_expire_seconds})
 
     # ── Shared response helper ────────────────────────────────────────────────
@@ -965,6 +995,7 @@ if __name__ == "__main__":
     init_dashboard()
 
     threading.Thread(target=midnight_scheduler, daemon=True).start()
+    threading.Thread(target=_persist_loop, daemon=True).start()
 
     server = ThreadingHTTPServer(("", PORT), Handler)
     print(f"Dashboard   →  http://localhost:{PORT}")
