@@ -1033,6 +1033,7 @@ function iconSVG(path, size=22) { return `<svg width="${size}" height="${size}" 
 // ── DOM cache ──────────────────────────────────────────────────────────────
 const dom = {
   grid:        document.getElementById('grid'),
+  appBar:      document.querySelector('.app-bar'),
   connDot:     document.getElementById('conn-dot'),
   connLabel:   document.getElementById('conn-label'),
   lastSeen:    document.getElementById('last-seen'),
@@ -2780,7 +2781,7 @@ function syncGridRows() {
   const trackW = BASE_CELL + gap;
 
   const vw = window.innerWidth  / currentScale;
-  const vh = (window.innerHeight - 64) / currentScale;
+  const vh = window.innerHeight / currentScale - 64;  // app bar also scaled
 
   GRID_COLS     = Math.max(24, Math.ceil((vw - padL - padR + gap) / trackW) + 2);
   const minRows = Math.max(16, Math.ceil((vh - padT - padB + gap) / trackW) + 2);
@@ -2803,13 +2804,15 @@ function syncGridRows() {
 function applyScale(pct) {
   if (isMobile()) {
     currentScale = 1;
-    dom.grid.style.zoom = '';
+    dom.grid.style.zoom   = '';
+    dom.appBar.style.zoom = '';
     syncGridRows();
     if (selectedEUI) drawChart(selectedEUI);
     return;
   }
   currentScale               = pct / 100;
   dom.grid.style.zoom        = currentScale;
+  dom.appBar.style.zoom      = currentScale;
   dom.scaleLabel.textContent = pct + '%';
   syncGridRows();
   if (selectedEUI) drawChart(selectedEUI);
