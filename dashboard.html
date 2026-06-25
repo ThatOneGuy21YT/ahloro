@@ -95,13 +95,15 @@
 
     /* ── App bar ─────────────────────────────────────────────────────────── */
     .app-bar {
-      height: 64px;
+      min-height: 64px;
+      height: auto;
       background: var(--md-surf);
       border-bottom: 1px solid var(--md-outline-variant);
       display: flex;
       align-items: center;
-      padding: 0 20px;
-      gap: 12px;
+      flex-wrap: wrap;
+      padding: 8px 20px;
+      gap: 8px 12px;
       position: sticky;
       top: 0;
       z-index: 200;
@@ -580,11 +582,9 @@
       body { overflow-x: hidden; }
 
       .app-bar {
-        height: auto;
         min-height: 56px;
-        flex-wrap: wrap;
         gap: 6px;
-        padding: 8px 12px;
+        padding: 6px 12px;
       }
       .app-bar-title { font-size: 17px; }
       .app-bar-subtitle,
@@ -2792,7 +2792,7 @@ function syncGridRows() {
   const trackW = BASE_CELL + gap;
 
   const vw = window.innerWidth  / currentScale;
-  const vh = window.innerHeight / currentScale - 64;  // app bar also scaled
+  const vh = (window.innerHeight - dom.appBar.offsetHeight) / currentScale;
 
   GRID_COLS     = Math.max(24, Math.ceil((vw - padL - padR + gap) / trackW) + 2);
   const minRows = Math.max(16, Math.ceil((vh - padT - padB + gap) / trackW) + 2);
