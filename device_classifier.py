@@ -69,9 +69,8 @@ _EUI_OVERRIDES: dict[str, str] = {
 _DOOR_THRESHOLD = 0x0050000000000000000000
 
 # ── Analog threshold defaults ─────────────────────────────────────────────────
-_TEMP_HIGH_C     = 30.0    # above this → value=0 (HIGH)
-_SOUND_LOUD_DB   = 60.0    # above this → value=0 (LOUD)
-_TILT_THRESHOLD  = 15.0    # degrees from vertical → value=0 (TILTED)
+_TEMP_HIGH_C    = 30.0    # above this → value=0 (HIGH)
+_TILT_THRESHOLD = 15.0    # degrees from vertical → value=0 (TILTED)
 
 # ── Tilt/gyro byte offsets (configurable at runtime) ──────────────────────────
 # Each offset is the start byte for a little-endian signed int16 (reads 2 bytes).
@@ -119,6 +118,30 @@ def set_temp_byte_config(temp_start: int, temp_divisor: float,
     _temp_byte_config["humid_size"]    = int(humid_size)
     _temp_byte_config["humid_divisor"] = float(humid_divisor)
     _temp_byte_config["little_endian"] = bool(little_endian)
+
+
+# ── Sound byte config (configurable at runtime) ──────────────────────────────
+# Default: bytes 5-6 as big-endian uint16, dB×10 encoding (divisor=10).
+_sound_byte_config: dict = {
+    "start":         5,      # start byte of sound field
+    "size":          2,      # bytes to read: 1 (uint8) or 2 (uint16)
+    "divisor":       10.0,   # divide raw int by this to get dB (dB×10 → divisor 10)
+    "little_endian": False,  # byte order for 2-byte reads
+    "loud_db":       60.0,   # dB threshold above which is LOUD (value=0)
+}
+
+
+def get_sound_byte_config() -> dict:
+    return dict(_sound_byte_config)
+
+
+def set_sound_byte_config(start: int, size: int, divisor: float,
+                          little_endian: bool, loud_db: float) -> None:
+    _sound_byte_config["start"]         = int(start)
+    _sound_byte_config["size"]          = int(size)
+    _sound_byte_config["divisor"]       = float(divisor)
+    _sound_byte_config["little_endian"] = bool(little_endian)
+    _sound_byte_config["loud_db"]       = float(loud_db)
 
 
 # ── Button byte config (configurable at runtime) ──────────────────────────────
@@ -298,24 +321,22 @@ def _decode_temperature(data: bytes, r: dict) -> None:
 
 
 def _decode_sound(data: bytes, r: dict) -> None:
-    """
-    bytes 5-6: uint16.
-    Heuristic: if > 1000 assume raw ADC (0-4095 → scale to 0-120 dB),
-    otherwise assume dB×10 encoding.
-    """
-    if len(data) >= 7:
-        try:
-            raw = struct.unpack(">H", data[5:7])[0]
-            db = (raw / 4095.0) * 120.0 if raw > 1000 else raw / 10.0
-            r["raw_value"] = round(db, 1)
-            r["value"] = 0 if db >= _SOUND_LOUD_DB else 1
-            return
-        except struct.error:
-            pass
-    if len(data) > 5:
-        db = (data[5] / 255.0) * 120.0
+    cfg  = _sound_byte_config
+    s    = cfg["start"]
+    size = cfg["size"]
+    if len(data) < s + size:
+        return
+    try:
+        if size == 1:
+            raw = data[s]
+        else:
+            fmt = "<H" if cfg["little_endian"] else ">H"
+            raw = struct.unpack_from(fmt, data, s)[0]
+        db = raw / cfg["divisor"]
         r["raw_value"] = round(db, 1)
-        r["value"] = 0 if db >= _SOUND_LOUD_DB else 1
+        r["value"]     = 0 if db >= cfg["loud_db"] else 1
+    except (struct.error, ZeroDivisionError):
+        pass
 
 
 def _decode_tilt(data: bytes, r: dict) -> None:
