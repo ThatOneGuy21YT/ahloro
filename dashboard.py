@@ -62,7 +62,6 @@ def _json_dumps(obj) -> str:
 
 DIR      = os.path.dirname(os.path.abspath(__file__))
 LOGS_DIR = os.path.join(DIR, "logs")
-PORT     = int(os.environ.get("PORT", 8765))
 
 ONLINE_TIMEOUT         = 900
 _button_expire_seconds: float = 1.0
@@ -82,6 +81,7 @@ def _load_dotenv():
 
 _load_dotenv()
 
+PORT    = int(os.environ.get("PORT", 8765))
 DB_DSN  = os.environ.get("DATABASE_URL")
 API_KEY = os.environ.get("API_KEY", "")
 
