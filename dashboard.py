@@ -433,6 +433,14 @@ def _load_stats_from_db():
                 bc["check_byte"], bc["hold_value"], bc.get("double_value", 3),
             )
 
+        sc = config.get("sound_byte_config", {})
+        _SOUND_KEYS = ("start", "size", "divisor", "little_endian", "loud_db")
+        if all(k in sc for k in _SOUND_KEYS):
+            device_classifier.set_sound_byte_config(
+                sc["start"], sc["size"], sc["divisor"],
+                sc["little_endian"], sc["loud_db"],
+            )
+
         global _button_expire_seconds
         bes = config.get("button_expire_seconds")
         if isinstance(bes, (int, float)) and 0.1 <= bes <= 3600:
@@ -490,6 +498,7 @@ def _persist_stats(*, immediate: bool = False):
                 "tilt_byte_config":      device_classifier.get_tilt_byte_config(),
                 "temp_byte_config":      device_classifier.get_temp_byte_config(),
                 "button_byte_config":    device_classifier.get_button_byte_config(),
+                "sound_byte_config":     device_classifier.get_sound_byte_config(),
                 "button_expire_seconds": _button_expire_seconds,
             }.items():
                 cur.execute(
@@ -641,6 +650,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response(200, device_classifier.get_button_byte_config())
         elif self.path == "/button_expire_seconds":
             self._json_response(200, {"seconds": _button_expire_seconds})
+        elif self.path == "/sound_byte_config":
+            self._json_response(200, device_classifier.get_sound_byte_config())
         else:
             self._serve_static()
 
@@ -661,6 +672,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_set_button_byte_config()
         elif self.path == "/set_button_expire_seconds":
             self._handle_set_button_expire_seconds()
+        elif self.path == "/set_sound_byte_config":
+            self._handle_set_sound_byte_config()
         else:
             self.send_response(404)
             self.end_headers()
@@ -969,6 +982,33 @@ class Handler(BaseHTTPRequestHandler):
         _button_expire_seconds = secs
         _persist_stats(immediate=True)
         self._json_response(200, {"success": True, "seconds": _button_expire_seconds})
+
+    def _handle_set_sound_byte_config(self):
+        try:
+            body         = self._read_json()
+            start        = int(body["start"])
+            size         = int(body["size"])
+            divisor      = float(body["divisor"])
+            little_endian = bool(body["little_endian"])
+            loud_db      = float(body["loud_db"])
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
+            self._json_response(400, {"success": False, "error": str(exc)})
+            return
+        if not (0 <= start <= 60):
+            self._json_response(400, {"success": False, "error": "start must be 0–60"})
+            return
+        if size not in (1, 2):
+            self._json_response(400, {"success": False, "error": "size must be 1 or 2"})
+            return
+        if divisor <= 0:
+            self._json_response(400, {"success": False, "error": "divisor must be > 0"})
+            return
+        if not (0 <= loud_db <= 200):
+            self._json_response(400, {"success": False, "error": "loud_db must be 0–200"})
+            return
+        device_classifier.set_sound_byte_config(start, size, divisor, little_endian, loud_db)
+        _persist_stats(immediate=True)
+        self._json_response(200, {"success": True, **device_classifier.get_sound_byte_config()})
 
     # ── Shared response helper ────────────────────────────────────────────────
 
