@@ -2821,9 +2821,27 @@ window.addEventListener('resize', () => {
   if (isMobile()) {
     dom.grid.style.zoom = '';
     currentScale = 1;
+    syncGridRows();
+    if (selectedEUI) drawChart(selectedEUI);
+    return;
   }
-  syncGridRows();
-  if (selectedEUI) drawChart(selectedEUI);
+
+  // Find the rightmost column edge of any visible widget
+  let maxCol = 0;
+  document.querySelectorAll('.widget').forEach(w => {
+    if (w.style.display === 'none') return;
+    const m = (w.style.gridColumn || '').match(/(\d+)\s*\/\s*span\s+(\d+)/);
+    if (m) maxCol = Math.max(maxCol, parseInt(m[1]) + parseInt(m[2]) - 1);
+  });
+  if (maxCol < 1) maxCol = Math.max(GRID_COLS, 24);
+
+  // Scale so the widget content fits the viewport width (cap at 100%)
+  const contentW = maxCol * (BASE_CELL + 16) - 16 + 48;
+  const fitPct   = Math.floor(window.innerWidth / contentW * 100);
+  const pct      = Math.max(parseInt(dom.scaleSlider.min), Math.min(100, fitPct));
+
+  dom.scaleSlider.value = pct;
+  applyScale(pct);
 });
 
 // ── Log export ─────────────────────────────────────────────────────────────
