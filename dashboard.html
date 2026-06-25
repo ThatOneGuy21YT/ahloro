@@ -260,15 +260,15 @@
     }
     .scale-label { min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; }
     .scale-apply-btn {
-      background: var(--md-primary-container);
-      color: var(--md-on-primary-container);
-      border: none; border-radius: 20px;
+      background: var(--md-surf-high);
+      color: var(--md-on-surface);
+      border: 1.5px solid var(--md-outline-variant); border-radius: 20px;
       padding: 6px 14px;
       font-size: 13px; font-weight: 500; font-family: inherit;
-      cursor: pointer; transition: filter .15s;
+      cursor: pointer; transition: filter .15s, border-color .15s;
       white-space: nowrap;
     }
-    .scale-apply-btn:hover { filter: brightness(.92); }
+    .scale-apply-btn:hover { filter: brightness(.95); border-color: var(--md-outline); }
     #scale-slider {
       -webkit-appearance: none; appearance: none;
       width: 130px; height: 4px;
@@ -442,14 +442,20 @@
     .export-btn:hover  { filter: brightness(.92); }
     .export-btn:active { filter: brightness(.84); }
 
-    /* ── Add Device dialog ───────────────────────────────────────────────── */
-    #add-device-dialog {
+    /* ── Dialogs (shared) ────────────────────────────────────────────────── */
+    dialog {
       border: none; border-radius: var(--radius-xl);
       background: var(--md-surface); color: var(--md-on-surface);
-      padding: 0; width: 520px; max-width: calc(100vw - 48px);
+      padding: 0; max-width: calc(100vw - 48px);
+      max-height: calc(100svh - 48px); overflow-y: auto;
       box-shadow: 0 8px 40px rgba(0,0,0,.28);
+      margin: auto;
     }
-    #add-device-dialog::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2px); }
+    dialog::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2px); }
+    #add-device-dialog                           { width: 520px; }
+    #tilt-config-dialog, #temp-config-dialog,
+    #button-config-dialog                        { width: 400px; }
+    #button-expire-dialog, #delete-device-dialog { width: 340px; }
     .dialog-inner { padding: 28px; }
     .dialog-title { font-size: 20px; font-weight: 500; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; }
     .dialog-close { background: none; border: none; cursor: pointer; color: var(--md-on-surface-variant); border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; transition: background .15s; }
@@ -478,22 +484,15 @@
     /* ── Tilt config button (app bar) ────────────────────────────────────── */
     .tilt-cfg-btn {
       flex-shrink: 0; display: flex; align-items: center; gap: 6px;
-      background: none; border: 1.5px solid var(--md-outline-variant);
+      background: var(--md-surf-high); border: 1.5px solid var(--md-outline-variant);
       border-radius: 20px; padding: 6px 14px;
       font-size: 13px; font-weight: 500; font-family: inherit;
-      color: var(--md-on-surface-variant); cursor: pointer;
+      color: var(--md-on-surface); cursor: pointer;
       transition: background .15s, border-color .15s;
     }
-    .tilt-cfg-btn:hover { background: var(--md-surf-high); border-color: var(--md-outline); }
+    .tilt-cfg-btn:hover { filter: brightness(.95); border-color: var(--md-outline); }
 
     /* ── Tilt byte config dialog ─────────────────────────────────────────── */
-    #tilt-config-dialog {
-      border: none; border-radius: var(--radius-xl);
-      background: var(--md-surface); color: var(--md-on-surface);
-      padding: 0; width: 400px; max-width: calc(100vw - 48px);
-      box-shadow: 0 8px 40px rgba(0,0,0,.28);
-    }
-    #tilt-config-dialog::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2px); }
     .tilt-axis-row {
       display: flex; align-items: center; gap: 16px;
     }
