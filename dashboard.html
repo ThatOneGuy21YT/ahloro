@@ -247,6 +247,7 @@
     }
     .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--md-outline); transition: background .3s; }
     .conn-dot.connected  { background: #4caf50; }
+    .conn-dot.stale      { background: #ffc107; }
     .conn-dot.error      { background: var(--md-error); }
     .conn-dot.connecting { background: #ff9800; }
 
@@ -870,13 +871,13 @@
     <span class="btn-label">Expiry Timer</span>
   </button>
 
-  <div class="app-bar-spacer"></div>
-
   <!-- Add Device button -->
   <button class="add-device-btn" onclick="openAddDeviceDialog()">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
     <span class="btn-label">Add Device</span>
   </button>
+
+  <div class="app-bar-spacer"></div>
 
   <div class="scale-control">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14zm-1-7h2v2h2v2h-2v2h-2v-2h-2V11h2V9.5z"/></svg>
@@ -1732,10 +1733,26 @@ function refreshDeviceStatus(eui) {
 // ── SSE connection ─────────────────────────────────────────────────────────
 let evtSrc = null;
 
+let _pollerTimer = null;
+
+async function _checkPollerStatus() {
+  try {
+    const res = await fetch('/poller_status');
+    if (!res.ok) return;
+    const { online } = await res.json();
+    setConn(online ? 'connected' : 'stale');
+  } catch(_) { /* SSE onerror will handle a real disconnect */ }
+}
+
 function connect() {
   setConn('connecting');
   evtSrc = new EventSource('/events');
-  evtSrc.onopen = () => setConn('connected');
+
+  evtSrc.onopen = () => {
+    clearInterval(_pollerTimer);
+    _checkPollerStatus();
+    _pollerTimer = setInterval(_checkPollerStatus, 30000);
+  };
 
   evtSrc.onmessage = e => {
     const msg = JSON.parse(e.data);
@@ -1753,6 +1770,8 @@ function connect() {
   };
 
   evtSrc.onerror = () => {
+    clearInterval(_pollerTimer);
+    _pollerTimer = null;
     setConn('error');
     evtSrc.close();
     setTimeout(connect, 3000);
@@ -1762,6 +1781,7 @@ function connect() {
 function setConn(s) {
   dom.connDot.className     = 'conn-dot ' + s;
   dom.connLabel.textContent = s === 'connected' ? 'Connected'
+                            : s === 'stale'     ? 'No data'
                             : s === 'error'     ? 'Reconnecting…'
                             :                     'Connecting…';
 }
