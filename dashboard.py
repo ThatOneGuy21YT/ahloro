@@ -24,6 +24,7 @@ SSE / browser endpoints (unchanged from server.py):
   POST /set_button_expire_seconds
 """
 
+import base64
 import contextlib
 import datetime
 import decimal
@@ -81,9 +82,30 @@ def _load_dotenv():
 
 _load_dotenv()
 
-PORT    = int(os.environ.get("PORT", 8765))
-DB_DSN  = os.environ.get("DATABASE_URL")
-API_KEY = os.environ.get("API_KEY", "")
+PORT             = int(os.environ.get("PORT", 8765))
+BIND_HOST        = os.environ.get("BIND_HOST", "")
+CERT_FILE        = os.environ.get("CERT_FILE", "")
+KEY_FILE         = os.environ.get("KEY_FILE", "")
+DB_DSN           = os.environ.get("DATABASE_URL")
+API_KEY          = os.environ.get("API_KEY", "")
+BROWSER_PASSWORD = os.environ.get("BROWSER_PASSWORD", "")
+
+# ── Rate limiter (shared by API key + browser auth checks) ────────────────────
+_rate_lock  = threading.Lock()
+_auth_fails: dict[str, list[float]] = {}
+_RATE_WINDOW   = 60.0   # seconds
+_RATE_MAX_FAIL = 10     # max failures per IP per window
+
+def _is_rate_limited(ip: str) -> bool:
+    now = time.time()
+    with _rate_lock:
+        times = [t for t in _auth_fails.get(ip, []) if now - t < _RATE_WINDOW]
+        _auth_fails[ip] = times
+        return len(times) >= _RATE_MAX_FAIL
+
+def _record_auth_failure(ip: str) -> None:
+    with _rate_lock:
+        _auth_fails.setdefault(ip, []).append(time.time())
 
 if not DB_DSN:
     sys.exit("ERROR: DATABASE_URL is not set. Copy .env.example to .env.")
@@ -638,6 +660,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if not self._check_browser_auth():
+            return
         if self.path == "/events":
             self._serve_sse()
         elif self.path.startswith("/devices"):
@@ -663,29 +687,71 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/ingest/remove_device":
             self._handle_ingest_remove_device()
         elif self.path == "/set_device_type":
-            self._handle_set_device_type()
+            if self._check_browser_auth(): self._handle_set_device_type()
         elif self.path == "/set_tilt_byte_config":
-            self._handle_set_tilt_byte_config()
+            if self._check_browser_auth(): self._handle_set_tilt_byte_config()
         elif self.path == "/set_temp_byte_config":
-            self._handle_set_temp_byte_config()
+            if self._check_browser_auth(): self._handle_set_temp_byte_config()
         elif self.path == "/set_button_byte_config":
-            self._handle_set_button_byte_config()
+            if self._check_browser_auth(): self._handle_set_button_byte_config()
         elif self.path == "/set_button_expire_seconds":
-            self._handle_set_button_expire_seconds()
+            if self._check_browser_auth(): self._handle_set_button_expire_seconds()
         elif self.path == "/set_sound_byte_config":
-            self._handle_set_sound_byte_config()
+            if self._check_browser_auth(): self._handle_set_sound_byte_config()
         else:
             self.send_response(404)
             self.end_headers()
 
     # ── Auth ──────────────────────────────────────────────────────────────────
 
+    _SEC_HEADERS = [
+        ("X-Content-Type-Options", "nosniff"),
+        ("X-Frame-Options",        "DENY"),
+        ("Referrer-Policy",        "strict-origin-when-cross-origin"),
+    ]
+
+    def _send_security_headers(self):
+        for k, v in self._SEC_HEADERS:
+            self.send_header(k, v)
+
     def _check_api_key(self) -> bool:
         if not API_KEY:
-            return True   # no key configured → open
+            return True
+        ip = self.client_address[0]
+        if _is_rate_limited(ip):
+            self._json_response(429, {"error": "Too many requests"})
+            return False
         if self.headers.get("X-Api-Key", "") == API_KEY:
             return True
+        _record_auth_failure(ip)
         self._json_response(401, {"error": "Unauthorized"})
+        return False
+
+    def _check_browser_auth(self) -> bool:
+        if not BROWSER_PASSWORD:
+            return True
+        ip = self.client_address[0]
+        if _is_rate_limited(ip):
+            self.send_response(429)
+            self.send_header("Content-Length", "0")
+            self._send_security_headers()
+            self.end_headers()
+            return False
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Basic "):
+            try:
+                decoded  = base64.b64decode(auth[6:]).decode("utf-8", errors="replace")
+                _, _, pw = decoded.partition(":")
+                if pw == BROWSER_PASSWORD:
+                    return True
+            except Exception:
+                pass
+        _record_auth_failure(ip)
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="DoorSense"')
+        self.send_header("Content-Length", "0")
+        self._send_security_headers()
+        self.end_headers()
         return False
 
     def _read_json(self):
@@ -801,6 +867,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type",   mime)
         self.send_header("Content-Length", str(len(data)))
+        self._send_security_headers()
         self.end_headers()
         self.wfile.write(data)
 
@@ -832,6 +899,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control",               "no-cache")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("X-Accel-Buffering",           "no")
+        self._send_security_headers()
         self.end_headers()
 
         q = queue.Queue(maxsize=500)
@@ -1018,6 +1086,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type",               "application/json")
         self.send_header("Content-Length",             str(len(data)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_security_headers()
         self.end_headers()
         self.wfile.write(data)
 
@@ -1037,8 +1106,20 @@ if __name__ == "__main__":
     threading.Thread(target=midnight_scheduler, daemon=True).start()
     threading.Thread(target=_persist_loop, daemon=True).start()
 
-    server = ThreadingHTTPServer(("", PORT), Handler)
-    print(f"Dashboard   →  http://localhost:{PORT}")
+    server = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
+
+    scheme = "http"
+    if CERT_FILE and KEY_FILE:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(CERT_FILE, KEY_FILE)
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        scheme = "https"
+    elif CERT_FILE or KEY_FILE:
+        print("WARNING: set both CERT_FILE and KEY_FILE to enable TLS", file=sys.stderr)
+
+    bind_display = BIND_HOST or "0.0.0.0"
+    print(f"Dashboard   →  {scheme}://localhost:{PORT}  (bound to {bind_display})")
     print(f"Database    →  {DB_DSN.split('@')[-1]}")
     try:
         server.serve_forever()
