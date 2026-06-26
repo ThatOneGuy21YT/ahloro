@@ -66,6 +66,8 @@ LOGS_DIR = os.path.join(DIR, "logs")
 
 ONLINE_TIMEOUT         = 900
 _button_expire_seconds: float = 1.0
+_last_poller_contact:   float = 0.0
+_POLLER_TIMEOUT               = 120.0   # seconds before poller is considered offline
 
 
 def _load_dotenv():
@@ -676,6 +678,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response(200, {"seconds": _button_expire_seconds})
         elif self.path == "/sound_byte_config":
             self._json_response(200, device_classifier.get_sound_byte_config())
+        elif self.path.startswith("/log_data"):
+            self._serve_log_data()
+        elif self.path == "/poller_status":
+            self._serve_poller_status()
         else:
             self._serve_static()
 
@@ -769,6 +775,8 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_ingest_event(self):
         if not self._check_api_key():
             return
+        global _last_poller_contact
+        _last_poller_contact = time.time()
         try:
             event = self._read_json()
         except (json.JSONDecodeError, ValueError) as exc:
@@ -808,6 +816,8 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_ingest_devices(self):
         if not self._check_api_key():
             return
+        global _last_poller_contact
+        _last_poller_contact = time.time()
         try:
             body = self._read_json()
         except (json.JSONDecodeError, ValueError) as exc:
@@ -850,6 +860,76 @@ class Handler(BaseHTTPRequestHandler):
         _remove_device_from_db(eui)
         _device_states.pop(eui, None)
         self._json_response(200, {"ok": True})
+
+    # ── Poller status API ─────────────────────────────────────────────────────
+
+    def _serve_poller_status(self):
+        now    = time.time()
+        online = (_last_poller_contact > 0 and
+                  (now - _last_poller_contact) < _POLLER_TIMEOUT)
+        ago    = round(now - _last_poller_contact, 1) if _last_poller_contact else None
+        self._json_response(200, {"online": online, "last_contact_ago": ago})
+
+    # ── Log data API ──────────────────────────────────────────────────────────
+
+    def _serve_log_data(self):
+        from urllib.parse import urlparse, parse_qs
+        qs      = parse_qs(urlparse(self.path).query)
+        dev_eui = qs.get("devEUI", [None])[0]
+        try:
+            limit = min(int(qs.get("limit", ["500"])[0]), 5000)
+        except (ValueError, TypeError):
+            limit = 500
+
+        if not dev_eui:
+            rows = _db_execute(
+                "SELECT dev_eui, device_name FROM device_table_map ORDER BY device_name",
+                fetch=True,
+            ) or []
+            self._json_response(200, {
+                "devices": [{"devEUI": r[0], "name": r[1] or r[0]} for r in rows],
+            })
+            return
+
+        map_rows = _db_execute(
+            "SELECT table_name, device_name FROM device_table_map WHERE dev_eui = %s",
+            (dev_eui,), fetch=True,
+        )
+        if not map_rows:
+            self._json_response(404, {"error": "Device not found"})
+            return
+
+        table, device_name = map_rows[0]
+        device_name = device_name or dev_eui
+
+        try:
+            event_rows = _db_execute(
+                "SELECT id,"
+                " to_char(recorded_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),"
+                " device_type, value, raw_value, unit, extra"
+                " FROM " + table + " ORDER BY recorded_at DESC LIMIT %s",
+                (limit,), fetch=True,
+            ) or []
+        except Exception as exc:
+            self._json_response(500, {"error": str(exc)})
+            return
+
+        self._json_response(200, {
+            "rows": [
+                {
+                    "id":          r[0],
+                    "recorded_at": r[1],
+                    "device_type": r[2],
+                    "value":       r[3],
+                    "raw_value":   r[4],
+                    "unit":        r[5],
+                    "extra":       r[6],
+                }
+                for r in event_rows
+            ],
+            "device_name": device_name,
+            "total":       len(event_rows),
+        })
 
     # ── Static file serving ───────────────────────────────────────────────────
 

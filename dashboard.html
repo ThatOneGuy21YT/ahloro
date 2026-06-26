@@ -197,8 +197,9 @@
     }
     .dev-battery svg { flex-shrink: 0; }
 
-    /* ── Spacer ──────────────────────────────────────────────────────────── */
+    /* ── Spacer / row break ─────────────────────────────────────────────── */
     .app-bar-spacer { flex: 1; }
+    .app-bar-break  { width: 100%; }
 
     /* ── Add Device button ───────────────────────────────────────────────── */
     .add-device-btn {
@@ -246,6 +247,7 @@
     }
     .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--md-outline); transition: background .3s; }
     .conn-dot.connected  { background: #4caf50; }
+    .conn-dot.stale      { background: #ffc107; }
     .conn-dot.error      { background: var(--md-error); }
     .conn-dot.connecting { background: #ff9800; }
 
@@ -588,6 +590,29 @@
         gap: 6px;
         padding: 6px 12px;
       }
+
+
+      /* Icon-only circular buttons */
+      .btn-label { display: none; }
+      .devices-btn .chevron { display: none; }
+      .devices-btn {
+        width: 36px; height: 36px;
+        padding: 0; border-radius: 50%;
+        justify-content: center; gap: 0;
+      }
+      .add-device-btn {
+        width: 36px; height: 36px;
+        padding: 0; border-radius: 50%;
+        justify-content: center; gap: 0;
+      }
+      .tilt-cfg-btn {
+        width: 36px; height: 36px;
+        padding: 0; border-radius: 50%;
+        justify-content: center; gap: 0;
+      }
+      .type-select-label { display: none; }
+      #conn-label { display: none; }
+      .conn-pill { padding: 6px; gap: 0; }
       .app-bar-title { font-size: 17px; }
       .app-bar-subtitle,
       .scale-control { display: none; }
@@ -633,6 +658,123 @@
       /* No-device placeholder */
       #no-device-msg { height: calc(100vh - 120px); }
     }
+
+    /* ── Side navigation ─────────────────────────────────────────────────── */
+    .nav-toggle-btn {
+      width: 40px; height: 40px; border-radius: 50%;
+      background: transparent; border: none; color: var(--md-on-surface);
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      transition: background .15s; flex-shrink: 0;
+    }
+    .nav-toggle-btn:hover { background: var(--md-surf-high); }
+
+    .side-nav-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.32);
+      z-index: 299; opacity: 0; pointer-events: none;
+      transition: opacity .25s;
+    }
+    .side-nav-overlay.open { opacity: 1; pointer-events: auto; }
+
+    .side-nav {
+      position: fixed; top: 0; left: 0; bottom: 0;
+      width: min(25vw, 280px);
+      background: var(--md-surface);
+      border-right: 1px solid var(--md-outline-variant);
+      z-index: 300;
+      display: flex; flex-direction: column;
+      transform: translateX(-100%);
+      transition: transform .25s cubic-bezier(.4,0,.2,1);
+      overflow-y: auto;
+    }
+    .side-nav.open { transform: translateX(0); }
+    @media (max-width: 768px) { .side-nav { width: min(72vw, 280px); } }
+
+    .side-nav-header {
+      padding: 24px 16px 16px;
+      border-bottom: 1px solid var(--md-outline-variant);
+      display: flex; align-items: center; gap: 12px;
+    }
+    .side-nav-brand-icon {
+      width: 36px; height: 36px;
+      background: var(--md-primary-container); border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--md-on-primary-container); flex-shrink: 0;
+    }
+    .side-nav-brand-name { font-size: 18px; font-weight: 500; color: var(--md-on-surface); }
+
+    .side-nav-list {
+      list-style: none; margin: 0; padding: 8px 12px;
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .side-nav-item {
+      display: flex; align-items: center; gap: 14px;
+      padding: 10px 12px; border-radius: var(--radius-m);
+      font-size: 14px; font-weight: 500;
+      color: var(--md-on-surface);
+      cursor: pointer; transition: background .15s; user-select: none;
+    }
+    .side-nav-item:hover { background: var(--md-surf-high); }
+    .side-nav-item.active {
+      background: var(--md-primary-container);
+      color: var(--md-on-primary-container);
+    }
+    .side-nav-item svg { flex-shrink: 0; }
+
+    /* ── Table Viewer page ───────────────────────────────────────────────── */
+    #page-table {
+      flex-direction: column;
+      height: calc(100dvh - 64px); overflow: hidden;
+    }
+    .table-page-header {
+      min-height: 56px; background: var(--md-surf);
+      border-bottom: 1px solid var(--md-outline-variant);
+      display: flex; align-items: center; flex-wrap: wrap;
+      padding: 8px 20px; gap: 8px 12px; flex-shrink: 0;
+    }
+    .table-page-title {
+      font-size: 18px; font-weight: 500;
+      color: var(--md-on-surface); flex-shrink: 0;
+    }
+    .table-row-count {
+      font-size: 12px; color: var(--md-outline); white-space: nowrap;
+    }
+    .table-container { flex: 1; overflow-y: auto; overflow-x: auto; }
+    .table-empty {
+      padding: 64px 24px; text-align: center;
+      color: var(--md-outline); font-size: 14px;
+    }
+    .log-table {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+    }
+    .log-table th {
+      background: var(--md-surf); color: var(--md-on-surface-variant);
+      font-weight: 500; text-align: left; padding: 10px 14px;
+      border-bottom: 1.5px solid var(--md-outline-variant);
+      position: sticky; top: 0; z-index: 1;
+      white-space: nowrap; user-select: none;
+    }
+    .log-table td {
+      padding: 7px 14px;
+      border-bottom: 1px solid var(--md-outline-variant);
+      color: var(--md-on-surface); vertical-align: middle;
+    }
+    .log-table tbody tr:hover td { background: var(--md-surf-low); }
+    .log-table .cell-id {
+      color: var(--md-outline); font-size: 11px;
+      text-align: right; min-width: 48px;
+    }
+    .log-table .cell-ts {
+      font-family: 'Roboto Mono', monospace; font-size: 12px;
+      color: var(--md-outline); white-space: nowrap;
+    }
+    .log-table .cell-type { white-space: nowrap; }
+    .log-table .cell-value { font-weight: 500; }
+    .log-table .cell-extra {
+      max-width: 280px; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; font-family: monospace; font-size: 11px;
+      color: var(--md-outline);
+    }
   </style>
   <script>
     if ('serviceWorker' in navigator) {
@@ -642,20 +784,47 @@
 </head>
 <body>
 
+<!-- ── Side navigation ── -->
+<div class="side-nav-overlay" id="side-nav-overlay" onclick="closeSideNav()"></div>
+<nav class="side-nav" id="side-nav" aria-label="Main navigation">
+  <div class="side-nav-header">
+    <div class="side-nav-brand-icon">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3a4.237 4.237 0 0 0-6 0zm-4-4 2 2a7.074 7.074 0 0 1 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
+      </svg>
+    </div>
+    <span class="side-nav-brand-name">ahloro</span>
+  </div>
+  <ul class="side-nav-list">
+    <li class="side-nav-item active" id="nav-item-dashboard" onclick="navigateTo('dashboard')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
+      Dashboard
+    </li>
+    <li class="side-nav-item" id="nav-item-table" onclick="navigateTo('table')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h15c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-9 14H5v-3h6v3zm0-5H5V9h6v3zm9 5h-7v-3h7v3zm0-5h-7V9h7v3zm0-5H5V5h15v3z"/></svg>
+      Table Viewer
+    </li>
+  </ul>
+</nav>
+
 <!-- ── App bar ── -->
 <header class="app-bar">
+  <button class="nav-toggle-btn" id="nav-toggle-btn" onclick="toggleSideNav()" title="Open navigation menu" aria-label="Open navigation menu">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+  </button>
   <div class="app-bar-logo">
     <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
       <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3a4.237 4.237 0 0 0-6 0zm-4-4 2 2a7.074 7.074 0 0 1 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
     </svg>
   </div>
   <div class="app-bar-title">LoRaWAN Dashboard</div>
+  <div class="app-bar-break"></div>
 
   <!-- Devices dropdown -->
   <div class="devices-menu-wrap" id="devices-menu-wrap">
     <button class="devices-btn" id="devices-btn" onclick="toggleDevicesMenu()">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/></svg>
-      Devices
+      <svg class="dev-type-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/></svg>
+      <span class="btn-label">Devices</span>
       <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
     </button>
     <div class="devices-dropdown" id="devices-dropdown">
@@ -679,36 +848,36 @@
 
   <button class="tilt-cfg-btn" id="tilt-cfg-btn" onclick="openTiltConfigDialog()" title="Configure tilt sensor byte offsets" style="display:none">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
-    Byte Offsets
+    <span class="btn-label">Byte Offsets</span>
   </button>
 
   <button class="tilt-cfg-btn" id="temp-cfg-btn" onclick="openTempConfigDialog()" title="Configure temp/humidity byte offsets" style="display:none">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
-    Byte Offsets
+    <span class="btn-label">Byte Offsets</span>
   </button>
 
   <button class="tilt-cfg-btn" id="sound-cfg-btn" onclick="openSoundConfigDialog()" title="Configure sound sensor byte offsets" style="display:none">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
-    Byte Offsets
+    <span class="btn-label">Byte Offsets</span>
   </button>
 
   <button class="tilt-cfg-btn" id="button-cfg-btn" onclick="openButtonConfigDialog()" title="Configure button byte offsets" style="display:none">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
-    Byte Offsets
+    <span class="btn-label">Byte Offsets</span>
   </button>
 
   <button class="tilt-cfg-btn" id="button-expire-btn" onclick="openButtonExpireDialog()" title="Configure button press expiry duration" style="display:none">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61l1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.962 8.962 0 0012 4c-4.97 0-9 4.03-9 9s4.02 9 9 9 9-4.03 9-9c0-2.12-.74-4.07-1.97-5.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>
-    Expiry Timer
+    <span class="btn-label">Expiry Timer</span>
   </button>
-
-  <div class="app-bar-spacer"></div>
 
   <!-- Add Device button -->
   <button class="add-device-btn" onclick="openAddDeviceDialog()">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-    Add Device
+    <span class="btn-label">Add Device</span>
   </button>
+
+  <div class="app-bar-spacer"></div>
 
   <div class="scale-control">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14zm-1-7h2v2h2v2h-2v2h-2v-2h-2V11h2V9.5z"/></svg>
@@ -725,6 +894,7 @@
   </div>
 </header>
 
+<div id="page-dashboard">
 <!-- ── Widget grid ── -->
 <div class="grid" id="grid">
   <div id="drop-ghost"></div>
@@ -734,6 +904,29 @@
 <div id="no-device-msg" style="display:none">
   <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/></svg>
   <span>Select a device from the Devices menu</span>
+</div>
+</div>
+
+<!-- ── Table Viewer page ── -->
+<div id="page-table" style="display:none">
+  <div class="table-page-header">
+    <div class="table-page-title">Table Viewer</div>
+    <div class="type-select-wrap">
+      <span class="type-select-label">Device</span>
+      <select class="type-select" id="table-device-select" style="max-width:220px" onchange="loadTableData()">
+        <option value="">— select device —</option>
+      </select>
+    </div>
+    <div class="app-bar-spacer"></div>
+    <span class="table-row-count" id="table-row-count"></span>
+    <button class="scale-apply-btn" id="table-refresh-btn" onclick="loadTableData()" title="Refresh data">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+      Refresh
+    </button>
+  </div>
+  <div class="table-container" id="table-container">
+    <div class="table-empty">Select a device to view its log data</div>
+  </div>
 </div>
 
 <!-- ── Add Device dialog ── -->
@@ -1203,13 +1396,24 @@ function updateDropdownSelection() {
   dom.devDropdown.querySelectorAll('.device-option').forEach(opt => {
     opt.classList.toggle('selected', opt.dataset.eui === selectedEUI);
   });
-  // childNodes[2] is the text node between the chip icon and the chevron.
+  const label = dom.devBtn.querySelector('.btn-label');
   if (selectedEUI && deviceMeta[selectedEUI]) {
-    dom.devBtn.childNodes[2].textContent = ' ' + deviceMeta[selectedEUI].name;
+    if (label) label.textContent = deviceMeta[selectedEUI].name;
   } else {
-    dom.devBtn.childNodes[2].textContent = ' Devices';
+    if (label) label.textContent = 'Devices';
   }
+  _syncDevsBtnIcon();
   document.getElementById('delete-device-btn').disabled = !selectedEUI;
+}
+
+function _syncDevsBtnIcon() {
+  if (!isMobile()) return;
+  const svg = dom.devBtn.querySelector('.dev-type-icon');
+  if (!svg) return;
+  const iconPath = (selectedEUI && deviceMeta[selectedEUI])
+    ? typeProfile(deviceMeta[selectedEUI].deviceType).icon
+    : DEVICE_PROFILES.generic.icon;
+  svg.querySelector('path').setAttribute('d', iconPath);
 }
 
 function escHtml(str) {
@@ -1529,10 +1733,26 @@ function refreshDeviceStatus(eui) {
 // ── SSE connection ─────────────────────────────────────────────────────────
 let evtSrc = null;
 
+let _pollerTimer = null;
+
+async function _checkPollerStatus() {
+  try {
+    const res = await fetch('/poller_status');
+    if (!res.ok) return;
+    const { online } = await res.json();
+    setConn(online ? 'connected' : 'stale');
+  } catch(_) { /* SSE onerror will handle a real disconnect */ }
+}
+
 function connect() {
   setConn('connecting');
   evtSrc = new EventSource('/events');
-  evtSrc.onopen = () => setConn('connected');
+
+  evtSrc.onopen = () => {
+    clearInterval(_pollerTimer);
+    _checkPollerStatus();
+    _pollerTimer = setInterval(_checkPollerStatus, 30000);
+  };
 
   evtSrc.onmessage = e => {
     const msg = JSON.parse(e.data);
@@ -1550,6 +1770,8 @@ function connect() {
   };
 
   evtSrc.onerror = () => {
+    clearInterval(_pollerTimer);
+    _pollerTimer = null;
     setConn('error');
     evtSrc.close();
     setTimeout(connect, 3000);
@@ -1559,6 +1781,7 @@ function connect() {
 function setConn(s) {
   dom.connDot.className     = 'conn-dot ' + s;
   dom.connLabel.textContent = s === 'connected' ? 'Connected'
+                            : s === 'stale'     ? 'No data'
                             : s === 'error'     ? 'Reconnecting…'
                             :                     'Connecting…';
 }
@@ -2272,6 +2495,7 @@ function applyDeviceType(eui, type) {
     if (scfgBtn)   scfgBtn.style.display   = type === 'sound'       ? '' : 'none';
     if (bcfgBtn)   bcfgBtn.style.display   = type === 'button'      ? '' : 'none';
     if (expireBtn) expireBtn.style.display = type === 'button'      ? '' : 'none';
+    _syncDevsBtnIcon();
   }
 
   // Status panel: binary ring/text vs analog number vs gyro axes.
@@ -3155,6 +3379,128 @@ fetchTempByteConfig();
 fetchButtonByteConfig();
 fetchButtonExpireSeconds();
 connect();
+
+// ── Side navigation ────────────────────────────────────────────────────────
+function toggleSideNav() {
+  document.getElementById('side-nav').classList.contains('open')
+    ? closeSideNav() : openSideNav();
+}
+function openSideNav() {
+  document.getElementById('side-nav').classList.add('open');
+  document.getElementById('side-nav-overlay').classList.add('open');
+}
+function closeSideNav() {
+  document.getElementById('side-nav').classList.remove('open');
+  document.getElementById('side-nav-overlay').classList.remove('open');
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSideNav(); });
+
+// ── Page routing ───────────────────────────────────────────────────────────
+const PAGE_IDS = ['dashboard', 'table'];
+let currentPage = 'dashboard';
+
+function navigateTo(page) {
+  if (page === currentPage) { closeSideNav(); return; }
+  currentPage = page;
+  closeSideNav();
+  PAGE_IDS.forEach(p => {
+    const el = document.getElementById('page-' + p);
+    el.style.display = p === page ? (p === 'table' ? 'flex' : '') : 'none';
+    document.getElementById('nav-item-' + p)?.classList.toggle('active', p === page);
+  });
+  if (page === 'table') loadTableViewerDevices();
+}
+
+// ── Table Viewer ───────────────────────────────────────────────────────────
+async function loadTableViewerDevices() {
+  const sel = document.getElementById('table-device-select');
+  try {
+    const res  = await fetch('/log_data');
+    const data = await res.json();
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">— select device —</option>';
+    (data.devices || []).forEach(d => {
+      const opt = document.createElement('option');
+      opt.value       = d.devEUI;
+      opt.textContent = d.name || d.devEUI;
+      sel.appendChild(opt);
+    });
+    if (prev && [...sel.options].some(o => o.value === prev)) {
+      sel.value = prev;
+    } else if ((data.devices || []).length === 1) {
+      sel.value = data.devices[0].devEUI;
+    }
+    if (sel.value) loadTableData();
+  } catch(e) {
+    console.error('loadTableViewerDevices:', e);
+  }
+}
+
+async function loadTableData() {
+  const sel       = document.getElementById('table-device-select');
+  const container = document.getElementById('table-container');
+  const rowCount  = document.getElementById('table-row-count');
+  const devEUI    = sel.value;
+
+  if (!devEUI) {
+    container.innerHTML = '<div class="table-empty">Select a device to view its log data</div>';
+    rowCount.textContent = '';
+    return;
+  }
+
+  container.innerHTML = '<div class="table-empty">Loading…</div>';
+  rowCount.textContent = '';
+
+  try {
+    const res = await fetch('/log_data?devEUI=' + encodeURIComponent(devEUI) + '&limit=500');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const rows = data.rows || [];
+
+    rowCount.textContent = rows.length + (rows.length === 500 ? '+ rows' : ' rows');
+
+    if (!rows.length) {
+      container.innerHTML = '<div class="table-empty">No log data for this device yet</div>';
+      return;
+    }
+
+    const tbl = document.createElement('table');
+    tbl.className = 'log-table';
+    tbl.innerHTML =
+      '<thead><tr>' +
+      '<th>#</th><th>Timestamp (UTC)</th><th>Type</th>' +
+      '<th>Value</th><th>Raw</th><th>Unit</th><th>Extra</th>' +
+      '</tr></thead>';
+
+    const tbody = document.createElement('tbody');
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      const extraStr = r.extra ? JSON.stringify(r.extra) : '—';
+      tr.innerHTML =
+        '<td class="cell-id">'    + (r.id ?? '') + '</td>' +
+        '<td class="cell-ts">'    + (r.recorded_at || '—') + '</td>' +
+        '<td class="cell-type">'  + (r.device_type || '—') + '</td>' +
+        '<td class="cell-value">' + (r.value      != null ? r.value : '—') + '</td>' +
+        '<td class="cell-value">' + (r.raw_value  != null ? (+r.raw_value).toFixed(3) : '—') + '</td>' +
+        '<td>'                    + (r.unit        || '—') + '</td>' +
+        '<td class="cell-extra">' + _escHtml(extraStr) + '</td>';
+      tbody.appendChild(tr);
+    });
+    tbl.appendChild(tbody);
+    container.innerHTML = '';
+    container.appendChild(tbl);
+
+  } catch(e) {
+    container.innerHTML =
+      '<div class="table-empty" style="color:var(--md-error)">Error: ' + _escHtml(e.message) + '</div>';
+  }
+}
+
+function _escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 </script>
 </body>
 </html>
