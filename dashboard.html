@@ -197,8 +197,9 @@
     }
     .dev-battery svg { flex-shrink: 0; }
 
-    /* ── Spacer ──────────────────────────────────────────────────────────── */
+    /* ── Spacer / row break ─────────────────────────────────────────────── */
     .app-bar-spacer { flex: 1; }
+    .app-bar-break  { display: none; }
 
     /* ── Add Device button ───────────────────────────────────────────────── */
     .add-device-btn {
@@ -588,6 +589,7 @@
         gap: 6px;
         padding: 6px 12px;
       }
+      .app-bar-break { display: block; width: 100%; }
 
       /* Icon-only circular buttons */
       .btn-label { display: none; }
@@ -815,6 +817,7 @@
     </svg>
   </div>
   <div class="app-bar-title">LoRaWAN Dashboard</div>
+  <div class="app-bar-break"></div>
 
   <!-- Devices dropdown -->
   <div class="devices-menu-wrap" id="devices-menu-wrap">
