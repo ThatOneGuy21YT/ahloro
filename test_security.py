@@ -17,7 +17,7 @@ import urllib.request
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--url",              default="http://localhost:8765")
+    p.add_argument("--url",              default="http://localhost:80")
     p.add_argument("--api-key",          default="1234")
     p.add_argument("--browser-password", default="")
     return p.parse_args()
