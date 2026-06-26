@@ -818,7 +818,7 @@
   <!-- Devices dropdown -->
   <div class="devices-menu-wrap" id="devices-menu-wrap">
     <button class="devices-btn" id="devices-btn" onclick="toggleDevicesMenu()">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/></svg>
+      <svg class="dev-type-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/></svg>
       <span class="btn-label">Devices</span>
       <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
     </button>
@@ -1391,13 +1391,24 @@ function updateDropdownSelection() {
   dom.devDropdown.querySelectorAll('.device-option').forEach(opt => {
     opt.classList.toggle('selected', opt.dataset.eui === selectedEUI);
   });
-  // childNodes[2] is the text node between the chip icon and the chevron.
+  const label = dom.devBtn.querySelector('.btn-label');
   if (selectedEUI && deviceMeta[selectedEUI]) {
-    dom.devBtn.childNodes[2].textContent = ' ' + deviceMeta[selectedEUI].name;
+    if (label) label.textContent = deviceMeta[selectedEUI].name;
   } else {
-    dom.devBtn.childNodes[2].textContent = ' Devices';
+    if (label) label.textContent = 'Devices';
   }
+  _syncDevsBtnIcon();
   document.getElementById('delete-device-btn').disabled = !selectedEUI;
+}
+
+function _syncDevsBtnIcon() {
+  if (!isMobile()) return;
+  const svg = dom.devBtn.querySelector('.dev-type-icon');
+  if (!svg) return;
+  const iconPath = (selectedEUI && deviceMeta[selectedEUI])
+    ? typeProfile(deviceMeta[selectedEUI].deviceType).icon
+    : DEVICE_PROFILES.generic.icon;
+  svg.querySelector('path').setAttribute('d', iconPath);
 }
 
 function escHtml(str) {
@@ -2460,6 +2471,7 @@ function applyDeviceType(eui, type) {
     if (scfgBtn)   scfgBtn.style.display   = type === 'sound'       ? '' : 'none';
     if (bcfgBtn)   bcfgBtn.style.display   = type === 'button'      ? '' : 'none';
     if (expireBtn) expireBtn.style.display = type === 'button'      ? '' : 'none';
+    _syncDevsBtnIcon();
   }
 
   // Status panel: binary ring/text vs analog number vs gyro axes.
