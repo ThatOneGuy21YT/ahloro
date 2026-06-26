@@ -714,30 +714,35 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in self._SEC_HEADERS:
             self.send_header(k, v)
 
+    def version_string(self):
+        return "DoorSense"
+
     def _check_api_key(self) -> bool:
         if not API_KEY:
             return True
-        ip = self.client_address[0]
+        ip  = self.client_address[0]
+        key = self.headers.get("X-Api-Key", "")
         if _is_rate_limited(ip):
             self._json_response(429, {"error": "Too many requests"})
             return False
-        if self.headers.get("X-Api-Key", "") == API_KEY:
+        if key == API_KEY:
             return True
-        _record_auth_failure(ip)
+        if key:  # only count failures when a key was actually presented
+            _record_auth_failure(ip)
         self._json_response(401, {"error": "Unauthorized"})
         return False
 
     def _check_browser_auth(self) -> bool:
         if not BROWSER_PASSWORD:
             return True
-        ip = self.client_address[0]
+        ip   = self.client_address[0]
+        auth = self.headers.get("Authorization", "")
         if _is_rate_limited(ip):
             self.send_response(429)
             self.send_header("Content-Length", "0")
             self._send_security_headers()
             self.end_headers()
             return False
-        auth = self.headers.get("Authorization", "")
         if auth.startswith("Basic "):
             try:
                 decoded  = base64.b64decode(auth[6:]).decode("utf-8", errors="replace")
@@ -746,7 +751,8 @@ class Handler(BaseHTTPRequestHandler):
                     return True
             except Exception:
                 pass
-        _record_auth_failure(ip)
+            _record_auth_failure(ip)  # wrong credentials presented — count it
+        # No credentials at all — reject without counting (not a brute-force attempt)
         self.send_response(401)
         self.send_header("WWW-Authenticate", 'Basic realm="DoorSense"')
         self.send_header("Content-Length", "0")
