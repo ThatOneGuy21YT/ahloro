@@ -587,8 +587,28 @@
         min-height: 56px;
         gap: 6px;
         padding: 6px 12px;
-        justify-content: center;
       }
+
+      /* Icon-only circular buttons */
+      .btn-label { display: none; }
+      .devices-btn .chevron { display: none; }
+      .devices-btn {
+        width: 36px; height: 36px;
+        padding: 0; border-radius: 50%;
+        justify-content: center; gap: 0;
+      }
+      .add-device-btn {
+        width: 36px; height: 36px;
+        padding: 0; border-radius: 50%; gap: 0;
+      }
+      .tilt-cfg-btn {
+        width: 36px; height: 36px;
+        padding: 0; border-radius: 50%;
+        justify-content: center; gap: 0;
+      }
+      .type-select-label { display: none; }
+      #conn-label { display: none; }
+      .conn-pill { padding: 6px; gap: 0; }
       .app-bar-title { font-size: 17px; }
       .app-bar-subtitle,
       .scale-control { display: none; }
@@ -799,7 +819,7 @@
   <div class="devices-menu-wrap" id="devices-menu-wrap">
     <button class="devices-btn" id="devices-btn" onclick="toggleDevicesMenu()">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/></svg>
-      Devices
+      <span class="btn-label">Devices</span>
       <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
     </button>
     <div class="devices-dropdown" id="devices-dropdown">
@@ -823,27 +843,27 @@
 
   <button class="tilt-cfg-btn" id="tilt-cfg-btn" onclick="openTiltConfigDialog()" title="Configure tilt sensor byte offsets" style="display:none">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
-    Byte Offsets
+    <span class="btn-label">Byte Offsets</span>
   </button>
 
   <button class="tilt-cfg-btn" id="temp-cfg-btn" onclick="openTempConfigDialog()" title="Configure temp/humidity byte offsets" style="display:none">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
-    Byte Offsets
+    <span class="btn-label">Byte Offsets</span>
   </button>
 
   <button class="tilt-cfg-btn" id="sound-cfg-btn" onclick="openSoundConfigDialog()" title="Configure sound sensor byte offsets" style="display:none">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
-    Byte Offsets
+    <span class="btn-label">Byte Offsets</span>
   </button>
 
   <button class="tilt-cfg-btn" id="button-cfg-btn" onclick="openButtonConfigDialog()" title="Configure button byte offsets" style="display:none">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
-    Byte Offsets
+    <span class="btn-label">Byte Offsets</span>
   </button>
 
   <button class="tilt-cfg-btn" id="button-expire-btn" onclick="openButtonExpireDialog()" title="Configure button press expiry duration" style="display:none">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61l1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.962 8.962 0 0012 4c-4.97 0-9 4.03-9 9s4.02 9 9 9 9-4.03 9-9c0-2.12-.74-4.07-1.97-5.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>
-    Expiry Timer
+    <span class="btn-label">Expiry Timer</span>
   </button>
 
   <div class="app-bar-spacer"></div>
@@ -851,7 +871,7 @@
   <!-- Add Device button -->
   <button class="add-device-btn" onclick="openAddDeviceDialog()">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-    Add Device
+    <span class="btn-label">Add Device</span>
   </button>
 
   <div class="scale-control">
