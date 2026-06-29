@@ -248,7 +248,7 @@ def decode_payload(device_type: str, dev_eui: str, raw_hex: str) -> dict:
         return result
 
     if device_type == DOOR:
-        _decode_binary_check(data, result, _door_byte_config["check_byte"])
+        _decode_binary_check(data, result, _door_byte_config["check_byte"], invert=True)
     elif device_type == MOTION:
         _decode_binary_check(data, result, _motion_byte_config["check_byte"])
     elif device_type == BUTTON:
@@ -289,14 +289,18 @@ def get_unit(device_type: str) -> str | None:
 
 # ── Internal decoders ─────────────────────────────────────────────────────────
 
-def _decode_binary_check(data: bytes, r: dict, check_byte: int) -> None:
+def _decode_binary_check(data: bytes, r: dict, check_byte: int, invert: bool = False) -> None:
     """Read one configurable byte; non-zero → active (value=0), zero → inactive (value=1).
+    invert=True flips the sense: non-zero → inactive (value=1), zero → active (value=0).
     Falls back to the last byte when check_byte is out of range."""
     try:
-        r["value"] = 0 if data[check_byte] != 0 else 1
+        nonzero = data[check_byte] != 0
     except IndexError:
-        if data:
-            r["value"] = 0 if data[-1] != 0 else 1
+        nonzero = bool(data) and data[-1] != 0
+    if invert:
+        r["value"] = 1 if nonzero else 0
+    else:
+        r["value"] = 0 if nonzero else 1
 
 
 def _decode_binary_generic(data: bytes, r: dict) -> None:
