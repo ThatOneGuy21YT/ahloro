@@ -68,6 +68,7 @@ LOGS_DIR = os.path.join(DIR, "logs")
 
 ONLINE_TIMEOUT         = 900
 _button_expire_seconds: float = 1.0
+_temp_unit: str = "C"   # "C" or "F"
 _last_poller_contact:   float = 0.0
 _POLLER_TIMEOUT               = 120.0   # seconds before poller is considered offline
 
@@ -568,10 +569,14 @@ def _load_stats_from_db():
         if "check_byte" in gc:
             device_classifier.set_generic_byte_config(gc["check_byte"])
 
-        global _button_expire_seconds
+        global _button_expire_seconds, _temp_unit
         bes = config.get("button_expire_seconds")
         if isinstance(bes, (int, float)) and 0.1 <= bes <= 3600:
             _button_expire_seconds = float(bes)
+
+        tu = config.get("temp_unit")
+        if tu in ("C", "F"):
+            _temp_unit = tu
 
     except Exception as exc:
         print(f"DB load_stats error: {exc}", file=sys.stderr)
@@ -630,6 +635,7 @@ def _persist_stats(*, immediate: bool = False):
                 "motion_byte_config":    device_classifier.get_motion_byte_config(),
                 "generic_byte_config":   device_classifier.get_generic_byte_config(),
                 "button_expire_seconds": _button_expire_seconds,
+                "temp_unit":             _temp_unit,
             }.items():
                 cur.execute(
                     "INSERT INTO app_config (key, value) VALUES (%s,%s) "
@@ -809,6 +815,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response(200, {"seconds": _button_expire_seconds})
         elif self.path == "/sound_byte_config":
             self._json_response(200, device_classifier.get_sound_byte_config())
+        elif self.path == "/temp_unit":
+            self._json_response(200, {"unit": _temp_unit})
         elif self.path == "/door_byte_config":
             self._json_response(200, device_classifier.get_door_byte_config())
         elif self.path == "/motion_byte_config":
@@ -841,6 +849,8 @@ class Handler(BaseHTTPRequestHandler):
             if self._check_browser_auth(): self._handle_set_button_expire_seconds()
         elif self.path == "/set_sound_byte_config":
             if self._check_browser_auth(): self._handle_set_sound_byte_config()
+        elif self.path == "/set_temp_unit":
+            if self._check_browser_auth(): self._handle_set_temp_unit()
         elif self.path == "/set_door_byte_config":
             if self._check_browser_auth(): self._handle_set_door_byte_config()
         elif self.path == "/set_motion_byte_config":
@@ -1678,6 +1688,19 @@ class Handler(BaseHTTPRequestHandler):
         device_classifier.set_sound_byte_config(start, size, divisor, little_endian, loud_db)
         _persist_stats(immediate=True)
         self._json_response(200, {"success": True, **device_classifier.get_sound_byte_config()})
+
+    def _handle_set_temp_unit(self):
+        global _temp_unit
+        try:
+            body = self._read_json()
+            unit = str(body["unit"]).upper()
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            self._json_response(400, {"success": False, "error": "unit must be 'C' or 'F'"}); return
+        if unit not in ("C", "F"):
+            self._json_response(400, {"success": False, "error": "unit must be 'C' or 'F'"}); return
+        _temp_unit = unit
+        _persist_stats(immediate=True)
+        self._json_response(200, {"success": True, "unit": _temp_unit})
 
     def _handle_set_door_byte_config(self):
         self._handle_set_simple_check_byte("door")

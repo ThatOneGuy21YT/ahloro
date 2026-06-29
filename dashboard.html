@@ -932,6 +932,11 @@
     <span class="btn-label">Byte Offsets</span>
   </button>
 
+  <button class="tilt-cfg-btn" id="temp-unit-btn" onclick="toggleTempUnit()" title="Switch temperature unit" style="display:none">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15 13V5c0-1.66-1.34-3-3-3S9 3.34 9 5v8c-1.21.91-2 2.37-2 4 0 2.76 2.24 5 5 5s5-2.24 5-5c0-1.63-.79-3.09-2-4zm-4-2V5c0-.55.45-1 1-1s1 .45 1 1v1h-1v1h1v1h-1v1h1v1h-2z"/></svg>
+    <span class="btn-label" id="temp-unit-label">°C</span>
+  </button>
+
   <button class="tilt-cfg-btn" id="sound-cfg-btn" onclick="openSoundConfigDialog()" title="Configure sound sensor byte offsets" style="display:none">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
     <span class="btn-label">Byte Offsets</span>
@@ -2228,8 +2233,10 @@ function updateStatusWidget(eui, val, extra) {
 function updateAnalogStatus(eui, rawValue, unit, extra) {
   const ws = deviceWidgets[eui];
   if (!ws) return;
-  ws.analogValue.textContent = rawValue !== null ? String(rawValue) : '—';
-  ws.analogUnit.textContent  = unit || '';
+  const dispVal  = unit === '°C' ? _cToDisplay(rawValue) : rawValue;
+  const dispUnit = _displayTempUnit(unit);
+  ws.analogValue.textContent = dispVal !== null && dispVal !== undefined ? String(dispVal) : '—';
+  ws.analogUnit.textContent  = dispUnit || '';
 
   ws.analogExtra.innerHTML = '';
   const EXTRA_UNITS = { humidity: '%', temperature: '°C', pressure: 'hPa', co2: 'ppm', voc: 'ppb' };
@@ -2267,12 +2274,14 @@ function updateStats(eui) {
       ws.stGyroHoriz.textContent = horiz.toFixed(2) + '°';
     }
   } else if (dm.isAnalog) {
-    const unit = ds.lastUnit || '';
-    ws.stCurrent.textContent = ds.lastRawValue !== null ? ds.lastRawValue + unit : '—';
-    ws.stMin.textContent     = ds.minValue     !== null ? ds.minValue     + unit : '—';
-    ws.stMax.textContent     = ds.maxValue     !== null ? ds.maxValue     + unit : '—';
+    const rawUnit  = ds.lastUnit || '';
+    const unit     = _displayTempUnit(rawUnit);
+    const conv     = v => rawUnit === '°C' ? _cToDisplay(v) : v;
+    ws.stCurrent.textContent = ds.lastRawValue !== null ? conv(ds.lastRawValue) + unit : '—';
+    ws.stMin.textContent     = ds.minValue     !== null ? conv(ds.minValue)     + unit : '—';
+    ws.stMax.textContent     = ds.maxValue     !== null ? conv(ds.maxValue)     + unit : '—';
     ws.stAvg.textContent     = ds.countValue > 0
-      ? (ds.sumValue / ds.countValue).toFixed(1) + unit : '—';
+      ? conv(+(ds.sumValue / ds.countValue).toFixed(1)) + unit : '—';
   } else {
     ws.stOpens.textContent  = ds.opens;
     ws.stCloses.textContent = ds.closes;
@@ -2361,11 +2370,13 @@ function addAnalogLogRow(eui, rawValue, unit, extra, ms) {
   });
   const extraStr = Object.entries(extra || {}).map(([k, v]) => `${k}: ${v}`).join(' · ');
 
+  const dispLogVal  = unit === '°C' ? _cToDisplay(rawValue) : rawValue;
+  const dispLogUnit = _displayTempUnit(unit);
   const row = document.createElement('div');
   row.className = 'log-row';
   row.innerHTML = `
     <div class="log-pip" style="background:var(--md-primary)"></div>
-    <div class="log-state" style="color:var(--md-primary)">${rawValue}${escHtml(unit)}</div>
+    <div class="log-state" style="color:var(--md-primary)">${dispLogVal}${escHtml(dispLogUnit)}</div>
     <div class="log-time">${timeStr}</div>
     ${extraStr ? `<div class="log-dur">${escHtml(extraStr)}</div>` : ''}
   `;
@@ -2600,14 +2611,18 @@ function drawAnalogChart(eui, ctx, W, H, plotW, plotH, padLeft, padTop, padBot, 
   const pts = ds.chartPts.filter(p => p.rawValue !== undefined && p.rawValue !== null);
   if (!pts.length) return;
 
-  let yMin = Math.min(...pts.map(p => p.rawValue));
-  let yMax = Math.max(...pts.map(p => p.rawValue));
+  const rawUnit   = ds.lastUnit || '';
+  const unit      = _displayTempUnit(rawUnit);
+  const convChart = v => rawUnit === '°C' ? _cToDisplay(v) : v;
+  const convPts   = pts.map(p => ({ ...p, dispValue: convChart(p.rawValue) }));
+
+  let yMin = Math.min(...convPts.map(p => p.dispValue));
+  let yMax = Math.max(...convPts.map(p => p.dispValue));
   const range = yMax - yMin;
   if (range < 1) { yMin -= 1; yMax += 1; }
   else           { yMin -= range * 0.1; yMax += range * 0.1; }
 
   const cLine = cs.getPropertyValue('--md-primary').trim();
-  const unit  = ds.lastUnit || '';
 
   ctx.textAlign = 'right'; ctx.font = `${fontSize}px system-ui`;
   ctx.fillStyle = cLabel;
@@ -2623,17 +2638,17 @@ function drawAnalogChart(eui, ctx, W, H, plotW, plotH, padLeft, padTop, padBot, 
   ctx.lineJoin    = 'round'; ctx.lineCap = 'round';
   ctx.beginPath();
   let started = false;
-  for (const pt of pts) {
+  for (const pt of convPts) {
     const x = padLeft + ((pt.time - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
-    const y = padTop  + ((yMax - pt.rawValue) / (yMax - yMin)) * plotH;
+    const y = padTop  + ((yMax - pt.dispValue) / (yMax - yMin)) * plotH;
     if (!started) { ctx.moveTo(x, y); started = true; }
     else            ctx.lineTo(x, y);
   }
   ctx.stroke();
 
-  if (pts.length >= 2) {
-    const x0 = padLeft + ((pts[0].time - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
-    const xN = padLeft + ((pts[pts.length-1].time - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
+  if (convPts.length >= 2) {
+    const x0 = padLeft + ((convPts[0].time - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
+    const xN = padLeft + ((convPts[convPts.length-1].time - (now - WINDOW_MS)) / WINDOW_MS) * plotW;
     ctx.lineTo(xN, padTop + plotH);
     ctx.lineTo(x0, padTop + plotH);
     ctx.closePath();
@@ -2674,8 +2689,10 @@ function applyDeviceType(eui, type) {
     const doorCfgBtn  = document.getElementById('door-cfg-btn');
     const motCfgBtn   = document.getElementById('motion-cfg-btn');
     const genCfgBtn   = document.getElementById('generic-cfg-btn');
+    const tuBtn     = document.getElementById('temp-unit-btn');
     if (cfgBtn)     cfgBtn.style.display     = isGyro                ? '' : 'none';
     if (tcfgBtn)    tcfgBtn.style.display    = type === 'temperature' ? '' : 'none';
+    if (tuBtn)      tuBtn.style.display      = type === 'temperature' ? '' : 'none';
     if (scfgBtn)    scfgBtn.style.display    = type === 'sound'       ? '' : 'none';
     if (bcfgBtn)    bcfgBtn.style.display    = type === 'button'      ? '' : 'none';
     if (expireBtn)  expireBtn.style.display  = type === 'button'      ? '' : 'none';
@@ -3094,6 +3111,55 @@ function saveGenericByteConfig() {
   const el = document.getElementById(id);
   el.addEventListener('click', e => { if (e.target === el) el.close(); });
 });
+
+// ── Temperature unit toggle (°C / °F) ─────────────────────────────────────
+let _tempUnitF = false;   // false = Celsius, true = Fahrenheit
+
+function _cToDisplay(celsius) {
+  if (!_tempUnitF || celsius === null || celsius === undefined) return celsius;
+  return Math.round((celsius * 9 / 5 + 32) * 10) / 10;
+}
+function _displayTempUnit(originalUnit) {
+  return (originalUnit === '°C' && _tempUnitF) ? '°F' : originalUnit;
+}
+
+async function fetchTempUnit() {
+  try {
+    const resp = await fetch('/temp_unit');
+    if (resp.ok) {
+      const data = await resp.json();
+      _tempUnitF = data.unit === 'F';
+      _updateTempUnitLabel();
+    }
+  } catch (_) {}
+}
+
+function _updateTempUnitLabel() {
+  const lbl = document.getElementById('temp-unit-label');
+  if (lbl) lbl.textContent = _tempUnitF ? '°F' : '°C';
+}
+
+async function toggleTempUnit() {
+  _tempUnitF = !_tempUnitF;
+  _updateTempUnitLabel();
+  try {
+    await fetch('/set_temp_unit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ unit: _tempUnitF ? 'F' : 'C' }),
+    });
+  } catch (_) {}
+  // Re-render the current selected device if it's a temperature sensor.
+  if (selectedEUI) {
+    const ds = deviceStates[selectedEUI];
+    const dm = deviceMeta[selectedEUI];
+    if (ds && dm && dm.deviceType === 'temperature') {
+      updateAnalogStatus(selectedEUI, ds.lastRawValue, ds.lastUnit, ds.lastExtra || {});
+      updateStats(selectedEUI);
+      drawChart(selectedEUI);
+    }
+  }
+}
 
 // ── Button byte config dialog ──────────────────────────────────────────────
 let buttonByteConfig = { check_byte: -1, hold_value: 2, double_value: 3 };
@@ -3670,6 +3736,7 @@ fetchButtonExpireSeconds();
 fetchDoorByteConfig();
 fetchMotionByteConfig();
 fetchGenericByteConfig();
+fetchTempUnit();
 connect();
 _fetchCurrentUser();
 
