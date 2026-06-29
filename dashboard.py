@@ -71,6 +71,9 @@ _button_expire_seconds: float = 1.0
 _last_poller_contact:   float = 0.0
 _POLLER_TIMEOUT               = 120.0   # seconds before poller is considered offline
 
+_pending_gw_deletions: set[str] = set()
+_pending_gw_lock = threading.Lock()
+
 
 def _load_dotenv():
     path = os.path.join(DIR, ".env")
@@ -786,6 +789,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_log_data()
         elif self.path == "/poller_status":
             self._serve_poller_status()
+        elif self.path == "/pending_gateway_deletions":
+            self._serve_pending_gateway_deletions()
         else:
             self._serve_static()
 
@@ -810,6 +815,8 @@ class Handler(BaseHTTPRequestHandler):
             if self._check_browser_auth(): self._handle_set_sound_byte_config()
         elif self.path == "/delete_device":
             if self._check_browser_auth(): self._handle_delete_device()
+        elif self.path == "/confirm_gateway_deletions":
+            self._handle_confirm_gateway_deletions()
         else:
             self.send_response(404)
             self.end_headers()
@@ -1249,8 +1256,33 @@ class Handler(BaseHTTPRequestHandler):
                                     if d.get("devEUI", "").upper() != eui]
             remaining = [_build_device_out(d) for d in _device_registry]
 
+        with _pending_gw_lock:
+            _pending_gw_deletions.add(eui)
+
         broadcast({"devices_update": remaining})
         self._json_response(200, {"success": True})
+
+    # ── Gateway deletion coordination (poller ↔ dashboard) ───────────────────
+
+    def _serve_pending_gateway_deletions(self):
+        if not self._check_api_key():
+            return
+        with _pending_gw_lock:
+            euids = list(_pending_gw_deletions)
+        self._json_response(200, {"euids": euids})
+
+    def _handle_confirm_gateway_deletions(self):
+        if not self._check_api_key():
+            return
+        try:
+            body = self._read_json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._json_response(400, {"error": str(exc)})
+            return
+        confirmed = [e.upper() for e in body.get("euids", [])]
+        with _pending_gw_lock:
+            _pending_gw_deletions.difference_update(confirmed)
+        self._json_response(200, {"ok": True})
 
     # ── Poller status API ─────────────────────────────────────────────────────
 

@@ -199,11 +199,52 @@ def _post_devices_update():
 # ── Device initialisation ─────────────────────────────────────────────────────
 
 
+def _gw_login() -> str:
+    auth = _gw_request("POST", "internal/login", {"email": GW_EMAIL, "password": GW_PASS})
+    return auth["jwt"]
+
+
 def _fetch_gateway_devices() -> list:
-    auth  = _gw_request("POST", "internal/login", {"email": GW_EMAIL, "password": GW_PASS})
-    token = auth["jwt"]
+    token = _gw_login()
     resp  = _gw_request("GET", "devices?limit=100&applicationID=1", token=token)
     return resp.get("result", [])
+
+
+def _get_pending_gateway_deletions() -> list[str]:
+    url     = f"{DASHBOARD_URL}/pending_gateway_deletions"
+    headers = {}
+    if API_KEY:
+        headers["X-Api-Key"] = API_KEY
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read()).get("euids", [])
+    except Exception as exc:
+        print(f"GET pending_gateway_deletions error: {exc}", file=sys.stderr)
+        return []
+
+
+def _process_gateway_deletions():
+    """Delete any dashboard-requested devices from the gateway, then confirm."""
+    pending = _get_pending_gateway_deletions()
+    if not pending:
+        return
+    try:
+        token   = _gw_login()
+        deleted = []
+        for eui in pending:
+            try:
+                _gw_request("DELETE", f"devices/{eui}", token=token)
+                _device_states.pop(eui, None)
+                _device_type_store.pop(eui, None)
+                deleted.append(eui)
+                print(f"Gateway: deleted device {eui}")
+            except Exception as exc:
+                print(f"Gateway: delete {eui} failed: {exc}", file=sys.stderr)
+        if deleted:
+            _post_to_dashboard("/confirm_gateway_deletions", {"euids": deleted})
+    except Exception as exc:
+        print(f"Gateway deletion login error: {exc}", file=sys.stderr)
 
 
 def init_devices():
@@ -237,6 +278,7 @@ def device_status_refresh():
     while True:
         time.sleep(DEVICE_STATUS_REFRESH)
         try:
+            _process_gateway_deletions()
             fresh       = _fetch_gateway_devices()
             fresh_euids = {d["devEUI"].upper() for d in fresh}
 
