@@ -13,7 +13,8 @@ traffic is encoded with 256 bit AES keys and is sent securely by a user defined 
 
 ## User Account Control (OAuth)
 Using OAuth from Google's APIs, there is now email login support as well as a variable based whitelist for access. By default the entire site is blocked until the user logs in, but even after login, all hidden files and scripts cannot be accessed remotely.
-### Though not implemented yet, I plan to add support for devices per account along with the multi gateway support. Likely a dropdown of sorts will let you select the gateway you want to add a device to (or read from???).
+
+Though not implemented yet, I plan to add support for devices per account along with the multi gateway support. Likely a dropdown of sorts will let you select the gateway you want to add a device to (or read from???).
 
 # WIP Features
 ## Device Classifier
