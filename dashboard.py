@@ -32,11 +32,13 @@ import json
 import os
 import queue
 import re
+import secrets
 import ssl
 import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -89,8 +91,14 @@ BIND_HOST        = os.environ.get("BIND_HOST", "")
 CERT_FILE        = os.environ.get("CERT_FILE", "")
 KEY_FILE         = os.environ.get("KEY_FILE", "")
 DB_DSN           = os.environ.get("DATABASE_URL")
-API_KEY          = os.environ.get("API_KEY", "")
-BROWSER_PASSWORD = os.environ.get("BROWSER_PASSWORD", "")
+API_KEY               = os.environ.get("API_KEY", "")
+BROWSER_PASSWORD      = os.environ.get("BROWSER_PASSWORD", "")
+GOOGLE_CLIENT_ID      = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET  = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_ALLOWED_EMAILS = {
+    e.strip() for e in os.environ.get("GOOGLE_ALLOWED_EMAILS", "").split(",") if e.strip()
+}
+OAUTH_REDIRECT_URI    = os.environ.get("OAUTH_REDIRECT_URI", "")
 
 # ── Rate limiter (shared by API key + browser auth checks) ────────────────────
 _rate_lock  = threading.Lock()
@@ -108,6 +116,72 @@ def _is_rate_limited(ip: str) -> bool:
 def _record_auth_failure(ip: str) -> None:
     with _rate_lock:
         _auth_fails.setdefault(ip, []).append(time.time())
+
+
+# ── Session helpers (Google OAuth) ────────────────────────────────────────────
+
+_SESSION_TTL = 86400 * 30  # 30 days
+
+
+def _create_session(email: str, name: str, picture: str = "") -> str:
+    token = secrets.token_urlsafe(32)
+    _db_execute("DELETE FROM sessions WHERE expires_at < now()")
+    _db_execute(
+        "INSERT INTO sessions (token, email, name, picture, expires_at)"
+        " VALUES (%s, %s, %s, %s, to_timestamp(%s))",
+        (token, email, name, picture, time.time() + _SESSION_TTL),
+    )
+    return token
+
+
+def _get_session(token: str) -> dict | None:
+    rows = _db_execute(
+        "SELECT email, name, picture FROM sessions"
+        " WHERE token = %s AND expires_at > now()",
+        (token,), fetch=True,
+    )
+    if rows:
+        return {"email": rows[0][0], "name": rows[0][1], "picture": rows[0][2] or ""}
+    return None
+
+
+def _delete_session(token: str) -> None:
+    _db_execute("DELETE FROM sessions WHERE token = %s", (token,))
+
+
+def _oauth_exchange_code(code: str) -> dict | None:
+    data = urllib.parse.urlencode({
+        "code":          code,
+        "client_id":     GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri":  OAUTH_REDIRECT_URI,
+        "grant_type":    "authorization_code",
+    }).encode()
+    req = urllib.request.Request(
+        "https://oauth2.googleapis.com/token",
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read())
+    except Exception as exc:
+        print(f"OAuth token exchange error: {exc}", file=sys.stderr)
+        return None
+
+
+def _oauth_fetch_userinfo(access_token: str) -> dict | None:
+    req = urllib.request.Request(
+        "https://www.googleapis.com/oauth2/v2/userinfo",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read())
+    except Exception as exc:
+        print(f"OAuth userinfo error: {exc}", file=sys.stderr)
+        return None
+
 
 if not DB_DSN:
     sys.exit("ERROR: DATABASE_URL is not set. Copy .env.example to .env.")
@@ -188,6 +262,19 @@ def _init_db():
                 key   TEXT PRIMARY KEY,
                 value JSONB NOT NULL
             )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token      TEXT PRIMARY KEY,
+                email      TEXT NOT NULL,
+                name       TEXT,
+                picture    TEXT,
+                expires_at TIMESTAMPTZ NOT NULL
+            )
+        """)
+        # Add picture column to existing deployments that lack it
+        cur.execute("""
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS picture TEXT
         """)
     print("Database schema ready.")
 
@@ -662,9 +749,26 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        # Auth routes bypass the session/password gate
+        if self.path == "/auth/login":
+            self._handle_auth_login()
+            return
+        if self.path == "/auth/google":
+            self._handle_auth_google()
+            return
+        if self.path.startswith("/auth/callback"):
+            self._handle_auth_callback()
+            return
+        if self.path == "/auth/logout":
+            self._handle_auth_logout()
+            return
+
         if not self._check_browser_auth():
             return
-        if self.path == "/events":
+
+        if self.path == "/me":
+            self._serve_me()
+        elif self.path == "/events":
             self._serve_sse()
         elif self.path.startswith("/devices"):
             self._serve_devices()
@@ -738,7 +842,36 @@ class Handler(BaseHTTPRequestHandler):
         self._json_response(401, {"error": "Unauthorized"})
         return False
 
+    def _parse_cookies(self) -> dict:
+        result: dict = {}
+        for part in self.headers.get("Cookie", "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k:
+                result[k.strip()] = v.strip()
+        return result
+
     def _check_browser_auth(self) -> bool:
+        # ── Google OAuth session check ─────────────────────────────────────────
+        if GOOGLE_CLIENT_ID:
+            token   = self._parse_cookies().get("session", "")
+            session = _get_session(token) if token else None
+            if session:
+                self._session = session
+                return True
+            # Redirect GET requests to login; tell AJAX/POST callers 401
+            if self.command == "GET":
+                self.send_response(302)
+                self.send_header("Location", "/auth/login")
+                self._send_security_headers()
+                self.end_headers()
+            else:
+                self.send_response(401)
+                self.send_header("Content-Length", "0")
+                self._send_security_headers()
+                self.end_headers()
+            return False
+
+        # ── Basic Auth (fallback when Google OAuth not configured) ─────────────
         if not BROWSER_PASSWORD:
             return True
         ip   = self.client_address[0]
@@ -765,6 +898,238 @@ class Handler(BaseHTTPRequestHandler):
         self._send_security_headers()
         self.end_headers()
         return False
+
+    # ── Google OAuth handlers ─────────────────────────────────────────────────
+
+    _LOGIN_PAGE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · DoorSense</title>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{min-height:100vh;display:flex;align-items:center;justify-content:center;
+         background:#f0f4f4;font-family:'Google Sans',Roboto,system-ui,sans-serif}
+    @media(prefers-color-scheme:dark){
+      body{background:#191c1d}
+      .card{background:#1d2021;border-color:#3f484a}
+      .title{color:#e1e3e3}.subtitle{color:#899294}
+      .google-btn{background:#1d2021;border-color:#3f484a;color:#e1e3e3}
+      .google-btn:hover{background:#252a2b;border-color:#006874}
+    }
+    .card{background:#fff;border:1px solid #bfc8ca;border-radius:28px;
+          padding:48px 40px;width:min(420px,90vw);display:flex;
+          flex-direction:column;align-items:center;gap:24px;
+          box-shadow:0 2px 12px rgba(0,0,0,.08)}
+    .logo{width:56px;height:56px;background:#97f0ff;border-radius:50%;
+          display:flex;align-items:center;justify-content:center;color:#001f24}
+    .title{font-size:24px;font-weight:500;color:#191c1d}
+    .subtitle{font-size:14px;color:#6f797a;text-align:center;line-height:1.5}
+    .google-btn{display:flex;align-items:center;gap:12px;background:#fff;
+                border:1.5px solid #bfc8ca;border-radius:20px;padding:10px 24px;
+                font-size:14px;font-weight:500;font-family:inherit;color:#191c1d;
+                cursor:pointer;text-decoration:none;transition:background .15s,
+                border-color .15s,box-shadow .15s;width:100%;justify-content:center}
+    .google-btn:hover{background:#f0f4f4;border-color:#006874;
+                      box-shadow:0 1px 4px rgba(0,0,0,.12)}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3a4.237 4.237 0 0 0-6 0zm-4-4 2 2a7.074 7.074 0 0 1 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
+      </svg>
+    </div>
+    <div class="title">DoorSense</div>
+    <div class="subtitle">Sign in with your Google account to access the dashboard.</div>
+    <a class="google-btn" href="/auth/google">
+      <svg width="18" height="18" viewBox="0 0 24 24">
+        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+      </svg>
+      Sign in with Google
+    </a>
+  </div>
+</body>
+</html>"""
+
+    def _html_response(self, code: int, html: str, extra_headers: list[tuple] | None = None):
+        body = html.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self._send_security_headers()
+        for k, v in (extra_headers or []):
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_oauth_error(self, message: str):
+        safe_msg = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        self._html_response(403, f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Access denied · DoorSense</title>
+  <style>
+    *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+    body{{min-height:100vh;display:flex;align-items:center;justify-content:center;
+         background:#f0f4f4;font-family:'Google Sans',Roboto,system-ui,sans-serif}}
+    @media(prefers-color-scheme:dark){{
+      body{{background:#191c1d}}
+      .card{{background:#1d2021;border-color:#3f484a}}
+      .title{{color:#e1e3e3}}.msg{{color:#899294}}
+      .btn{{background:#1d2021;border-color:#3f484a;color:#e1e3e3}}
+      .btn:hover{{background:#252a2b;border-color:#006874}}
+    }}
+    .card{{background:#fff;border:1px solid #bfc8ca;border-radius:28px;
+           padding:48px 40px;width:min(420px,90vw);display:flex;
+           flex-direction:column;align-items:center;gap:20px;
+           box-shadow:0 2px 12px rgba(0,0,0,.08)}}
+    .logo{{width:56px;height:56px;background:#ffdad6;border-radius:50%;
+           display:flex;align-items:center;justify-content:center;color:#ba1a1a}}
+    .title{{font-size:22px;font-weight:500;color:#191c1d}}
+    .msg{{font-size:14px;color:#6f797a;text-align:center;line-height:1.5}}
+    .btn{{display:flex;align-items:center;justify-content:center;gap:8px;
+          background:#fff;border:1.5px solid #bfc8ca;border-radius:20px;
+          padding:10px 24px;font-size:14px;font-weight:500;font-family:inherit;
+          color:#191c1d;cursor:pointer;text-decoration:none;width:100%;
+          transition:background .15s,border-color .15s}}
+    .btn:hover{{background:#f0f4f4;border-color:#006874}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+      </svg>
+    </div>
+    <div class="title">Access denied</div>
+    <div class="msg">{safe_msg}</div>
+    <a class="btn" href="/auth/login">Try again</a>
+  </div>
+</body>
+</html>""")
+
+    def _handle_auth_login(self):
+        """Show the static sign-in landing page."""
+        if not GOOGLE_CLIENT_ID:
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self._send_security_headers()
+            self.end_headers()
+            return
+        self._html_response(200, self._LOGIN_PAGE)
+
+    def _handle_auth_google(self):
+        """Redirect the browser to Google's OAuth consent screen."""
+        if not GOOGLE_CLIENT_ID:
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self._send_security_headers()
+            self.end_headers()
+            return
+        state  = secrets.token_urlsafe(16)
+        params = {
+            "client_id":     GOOGLE_CLIENT_ID,
+            "redirect_uri":  OAUTH_REDIRECT_URI,
+            "response_type": "code",
+            "scope":         "openid email profile",
+            "state":         state,
+            "access_type":   "online",
+            "prompt":        "select_account",
+        }
+        url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
+        self.send_response(302)
+        self.send_header("Location", url)
+        self.send_header("Set-Cookie",
+            f"oauth_state={state}; HttpOnly; SameSite=Lax; Max-Age=300; Path=/")
+        self._send_security_headers()
+        self.end_headers()
+
+    def _handle_auth_callback(self):
+        """Exchange the authorization code for a session cookie."""
+        if not GOOGLE_CLIENT_ID:
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self._send_security_headers()
+            self.end_headers()
+            return
+        qs    = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        code  = (qs.get("code")  or [None])[0]
+        state = (qs.get("state") or [None])[0]
+        error = (qs.get("error") or [None])[0]
+
+        if error:
+            self._serve_oauth_error(f"Google returned an error: {error}")
+            return
+
+        cookies = self._parse_cookies()
+        if not code or not state or state != cookies.get("oauth_state"):
+            self._serve_oauth_error(
+                "Invalid or missing OAuth state. Please try signing in again."
+            )
+            return
+
+        token_data = _oauth_exchange_code(code)
+        if not token_data or "access_token" not in token_data:
+            self._serve_oauth_error("Failed to exchange authorisation code with Google.")
+            return
+
+        user = _oauth_fetch_userinfo(token_data["access_token"])
+        if not user:
+            self._serve_oauth_error("Failed to retrieve account information from Google.")
+            return
+
+        email   = user.get("email", "")
+        name    = user.get("name", "")
+        picture = user.get("picture", "")
+
+        if GOOGLE_ALLOWED_EMAILS and email not in GOOGLE_ALLOWED_EMAILS:
+            self._serve_oauth_error(
+                f"The account {email} is not permitted to access this dashboard."
+            )
+            return
+
+        session_token = _create_session(email, name, picture)
+        self.send_response(302)
+        self.send_header("Location", "/")
+        self.send_header("Set-Cookie",
+            f"session={session_token}; HttpOnly; SameSite=Lax;"
+            f" Max-Age={_SESSION_TTL}; Path=/")
+        self.send_header("Set-Cookie",
+            "oauth_state=; HttpOnly; SameSite=Lax; Max-Age=0; Path=/")
+        self._send_security_headers()
+        self.end_headers()
+
+    def _handle_auth_logout(self):
+        token = self._parse_cookies().get("session", "")
+        if token:
+            _delete_session(token)
+        self.send_response(302)
+        self.send_header("Location", "/auth/login")
+        self.send_header("Set-Cookie",
+            "session=; HttpOnly; SameSite=Lax; Max-Age=0; Path=/")
+        self._send_security_headers()
+        self.end_headers()
+
+    def _serve_me(self):
+        if not GOOGLE_CLIENT_ID:
+            self._json_response(404, {"error": "Google auth not enabled"})
+            return
+        session = getattr(self, "_session", None)
+        if session:
+            self._json_response(200, session)
+        else:
+            self._json_response(401, {"error": "Not authenticated"})
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -934,18 +1299,27 @@ class Handler(BaseHTTPRequestHandler):
     # ── Static file serving ───────────────────────────────────────────────────
 
     def _serve_static(self):
-        import urllib.parse, posixpath
+        import posixpath
         path     = urllib.parse.unquote(self.path.split("?")[0])
         filename = posixpath.basename(path) or "dashboard.html"
-        filepath = os.path.join(DIR, filename)
 
-        if not os.path.isfile(filepath):
+        # Block hidden files/dirs (.env, .git, .., etc.) at every path segment
+        if any(seg.startswith(".") for seg in path.split("/") if seg):
             self.send_response(404)
+            self._send_security_headers()
             self.end_headers()
             return
 
         ext  = os.path.splitext(filename)[1].lower()
-        mime = MIME_TYPES.get(ext, "application/octet-stream")
+        mime = MIME_TYPES.get(ext)           # None → not in allowlist
+
+        # Reject unknown extensions (.py, .pyc, .log, .env …) and missing files
+        filepath = os.path.join(DIR, filename)
+        if not mime or not os.path.isfile(filepath):
+            self.send_response(404)
+            self._send_security_headers()
+            self.end_headers()
+            return
 
         with open(filepath, "rb") as f:
             data = f.read()
