@@ -1131,6 +1131,10 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json_response(401, {"error": "Not authenticated"})
 
+    def _read_json(self):
+        length = int(self.headers.get("Content-Length", 0))
+        return json.loads(self.rfile.read(length))
+
     # ── Ingest endpoints (called by poller) ───────────────────────────────────
 
     def _handle_ingest_event(self):
