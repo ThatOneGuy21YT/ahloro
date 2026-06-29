@@ -247,6 +247,92 @@ def _process_gateway_deletions():
         print(f"Gateway deletion login error: {exc}", file=sys.stderr)
 
 
+def _get_pending_gateway_additions() -> list:
+    url     = f"{DASHBOARD_URL}/pending_gateway_additions"
+    headers = {"X-Api-Key": API_KEY} if API_KEY else {}
+    req     = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read()).get("additions", [])
+    except Exception as exc:
+        print(f"GET pending_gateway_additions error: {exc}", file=sys.stderr)
+        return []
+
+
+def _process_gateway_additions():
+    """Create any dashboard-requested devices on the gateway, then confirm."""
+    pending = _get_pending_gateway_additions()
+    if not pending:
+        return
+    try:
+        token = _gw_login()
+
+        # Fetch available device profiles once
+        prof_resp = _gw_request("GET", "device-profiles?applicationID=1&limit=100", token=token)
+        profiles  = prof_resp.get("result", [])
+
+        processed = []
+        for addition in pending:
+            eui  = addition.get("devEUI", "").upper()
+            mode = addition.get("mode", "OTAA")
+            name = addition.get("name", eui)
+            try:
+                # Pick profile: prefer one whose supportsJoin matches mode
+                wants_join = (mode == "OTAA")
+                profile_id = next(
+                    (p["id"] for p in profiles if p.get("supportsJoin") == wants_join),
+                    profiles[0]["id"] if profiles else None,
+                )
+                if not profile_id:
+                    print(f"Gateway add {eui}: no device profiles configured", file=sys.stderr)
+                    processed.append(eui)   # remove from queue; user must fix profile
+                    continue
+
+                _gw_request("POST", "devices", token=token, body={
+                    "device": {
+                        "applicationID": "1",
+                        "devEUI":         eui,
+                        "name":           name,
+                        "deviceProfileID": profile_id,
+                        "description":    "",
+                        "skipFCntCheck":  False,
+                    }
+                })
+
+                if mode == "OTAA":
+                    app_key = addition.get("appKey", "")
+                    keys    = {"devEUI": eui, "nwkKey": app_key, "appKey": app_key}
+                    if addition.get("joinEUI"):
+                        keys["appEUI"] = addition["joinEUI"]
+                    _gw_request("POST", f"devices/{eui}/keys", token=token,
+                                body={"deviceKeys": keys})
+                else:
+                    nwk = addition.get("nwkSKey", "")
+                    _gw_request("POST", f"devices/{eui}/activation", token=token, body={
+                        "deviceActivation": {
+                            "devEUI":        eui,
+                            "devAddr":       addition.get("devAddr", ""),
+                            "appSKey":       addition.get("appSKey", ""),
+                            "nwkSKey":       nwk,
+                            "fNwkSIntKey":   nwk,
+                            "sNwkSIntKey":   nwk,
+                            "nwkSessionKey": nwk,
+                        }
+                    })
+
+                print(f"Gateway: added device '{name}' ({eui}) [{mode}]")
+            except Exception as exc:
+                print(f"Gateway: add {eui} failed: {exc}", file=sys.stderr)
+            finally:
+                processed.append(eui)   # confirm regardless so queue doesn't grow
+
+        if processed:
+            _post_to_dashboard("/confirm_gateway_additions", {"euids": processed})
+
+    except Exception as exc:
+        print(f"Gateway additions error: {exc}", file=sys.stderr)
+
+
 def init_devices():
     try:
         devices = _fetch_gateway_devices()
@@ -279,6 +365,7 @@ def device_status_refresh():
         time.sleep(DEVICE_STATUS_REFRESH)
         try:
             _process_gateway_deletions()
+            _process_gateway_additions()
             fresh       = _fetch_gateway_devices()
             fresh_euids = {d["devEUI"].upper() for d in fresh}
 

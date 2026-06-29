@@ -71,7 +71,8 @@ _button_expire_seconds: float = 1.0
 _last_poller_contact:   float = 0.0
 _POLLER_TIMEOUT               = 120.0   # seconds before poller is considered offline
 
-_pending_gw_deletions: set[str] = set()
+_pending_gw_deletions:  set[str]  = set()
+_pending_gw_additions:  list[dict] = []
 _pending_gw_lock = threading.Lock()
 
 
@@ -770,6 +771,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/pending_gateway_deletions":
             self._serve_pending_gateway_deletions()
             return
+        if self.path == "/pending_gateway_additions":
+            self._serve_pending_gateway_additions()
+            return
 
         if not self._check_browser_auth():
             return
@@ -816,10 +820,14 @@ class Handler(BaseHTTPRequestHandler):
             if self._check_browser_auth(): self._handle_set_button_expire_seconds()
         elif self.path == "/set_sound_byte_config":
             if self._check_browser_auth(): self._handle_set_sound_byte_config()
+        elif self.path == "/add_device":
+            if self._check_browser_auth(): self._handle_add_device()
         elif self.path == "/delete_device":
             if self._check_browser_auth(): self._handle_delete_device()
         elif self.path == "/confirm_gateway_deletions":
             self._handle_confirm_gateway_deletions()
+        elif self.path == "/confirm_gateway_additions":
+            self._handle_confirm_gateway_additions()
         else:
             self.send_response(404)
             self.end_headers()
@@ -1286,6 +1294,51 @@ class Handler(BaseHTTPRequestHandler):
         with _pending_gw_lock:
             _pending_gw_deletions.difference_update(confirmed)
         self._json_response(200, {"ok": True})
+
+    def _serve_pending_gateway_additions(self):
+        if not self._check_api_key():
+            return
+        with _pending_gw_lock:
+            items = list(_pending_gw_additions)
+        self._json_response(200, {"additions": items})
+
+    def _handle_confirm_gateway_additions(self):
+        if not self._check_api_key():
+            return
+        try:
+            body = self._read_json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._json_response(400, {"error": str(exc)})
+            return
+        confirmed = {e.upper() for e in body.get("euids", [])}
+        with _pending_gw_lock:
+            _pending_gw_additions[:] = [
+                a for a in _pending_gw_additions
+                if a.get("devEUI", "").upper() not in confirmed
+            ]
+        self._json_response(200, {"ok": True})
+
+    def _handle_add_device(self):
+        try:
+            body = self._read_json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._json_response(400, {"success": False, "error": str(exc)})
+            return
+
+        eui  = body.get("devEUI", "").upper()
+        mode = body.get("mode", "OTAA")
+        if len(eui) != 16:
+            self._json_response(400, {"success": False, "error": "devEUI must be 16 hex characters"})
+            return
+        if mode not in ("OTAA", "ABP"):
+            self._json_response(400, {"success": False, "error": "mode must be OTAA or ABP"})
+            return
+
+        addition = {**body, "devEUI": eui}
+        with _pending_gw_lock:
+            _pending_gw_additions.append(addition)
+
+        self._json_response(200, {"success": True})
 
     # ── Poller status API ─────────────────────────────────────────────────────
 
