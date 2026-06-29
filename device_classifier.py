@@ -248,7 +248,7 @@ def decode_payload(device_type: str, dev_eui: str, raw_hex: str) -> dict:
         return result
 
     if device_type == DOOR:
-        _decode_binary_check(data, result, _door_byte_config["check_byte"])
+        _decode_binary_check(data, result, _door_byte_config["check_byte"], invert=True)
     elif device_type == MOTION:
         _decode_binary_check(data, result, _motion_byte_config["check_byte"])
     elif device_type == BUTTON:
