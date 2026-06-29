@@ -165,8 +165,7 @@ def set_button_byte_config(check_byte: int, hold_value: int, double_value: int =
 
 # ── Door byte config (configurable at runtime) ────────────────────────────────
 # Reads one byte; non-zero → OPEN (value=0), zero → CLOSED (value=1).
-# Default -1 reads the last byte, which is the most portable convention.
-_door_byte_config: dict = {"check_byte": -1}
+_door_byte_config: dict = {"check_byte": 0}
 
 
 def get_door_byte_config() -> dict:
