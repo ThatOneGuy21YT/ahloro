@@ -808,6 +808,8 @@ class Handler(BaseHTTPRequestHandler):
             if self._check_browser_auth(): self._handle_set_button_expire_seconds()
         elif self.path == "/set_sound_byte_config":
             if self._check_browser_auth(): self._handle_set_sound_byte_config()
+        elif self.path == "/delete_device":
+            if self._check_browser_auth(): self._handle_delete_device()
         else:
             self.send_response(404)
             self.end_headers()
@@ -1225,6 +1227,30 @@ class Handler(BaseHTTPRequestHandler):
         _remove_device_from_db(eui)
         _device_states.pop(eui, None)
         self._json_response(200, {"ok": True})
+
+    def _handle_delete_device(self):
+        """Browser-initiated device deletion."""
+        try:
+            body = self._read_json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._json_response(400, {"success": False, "error": str(exc)})
+            return
+
+        eui = body.get("devEUI", "").upper()
+        if not eui:
+            self._json_response(400, {"success": False, "error": "devEUI required"})
+            return
+
+        _remove_device_from_db(eui)
+        _device_states.pop(eui, None)
+
+        with _device_registry_lock:
+            _device_registry[:] = [d for d in _device_registry
+                                    if d.get("devEUI", "").upper() != eui]
+            remaining = [_build_device_out(d) for d in _device_registry]
+
+        broadcast({"devices_update": remaining})
+        self._json_response(200, {"success": True})
 
     # ── Poller status API ─────────────────────────────────────────────────────
 
