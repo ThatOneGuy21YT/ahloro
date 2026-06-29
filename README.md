@@ -21,7 +21,7 @@ Though not implemented yet, I plan to add support for devices per account along 
 The device_classifier.py has not been thoroughly tested, if the correct device type does not appear when an EUID is imported, then simply change the dropdown selection to a device type that most similarly aligns with the device type. To properly configure your device, check the hexadecimal values that your LoRaWAN compatible device sends and set the placements (offsets) of the values in the byte offset menu. The script by default will guess based on the text content of the device name.
 
 ## Sound Sensors
-Sound Devices are in testing and have not been properly configured, do not use for produciton environments.
+Sound Devices are in testing and have not been properly configured, do not use for production environments.
 
 # Planned Features/Roadmap
 ## Multi-Gateway
