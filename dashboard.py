@@ -1299,18 +1299,27 @@ class Handler(BaseHTTPRequestHandler):
     # ── Static file serving ───────────────────────────────────────────────────
 
     def _serve_static(self):
-        import urllib.parse, posixpath
+        import posixpath
         path     = urllib.parse.unquote(self.path.split("?")[0])
         filename = posixpath.basename(path) or "dashboard.html"
-        filepath = os.path.join(DIR, filename)
 
-        if not os.path.isfile(filepath):
+        # Block hidden files/dirs (.env, .git, .., etc.) at every path segment
+        if any(seg.startswith(".") for seg in path.split("/") if seg):
             self.send_response(404)
+            self._send_security_headers()
             self.end_headers()
             return
 
         ext  = os.path.splitext(filename)[1].lower()
-        mime = MIME_TYPES.get(ext, "application/octet-stream")
+        mime = MIME_TYPES.get(ext)           # None → not in allowlist
+
+        # Reject unknown extensions (.py, .pyc, .log, .env …) and missing files
+        filepath = os.path.join(DIR, filename)
+        if not mime or not os.path.isfile(filepath):
+            self.send_response(404)
+            self._send_security_headers()
+            self.end_headers()
+            return
 
         with open(filepath, "rb") as f:
             data = f.read()
