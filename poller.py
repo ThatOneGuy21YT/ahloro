@@ -267,9 +267,16 @@ def _process_gateway_additions():
     try:
         token = _gw_login()
 
-        # Fetch available device profiles once
-        prof_resp = _gw_request("GET", "device-profiles?applicationID=1&limit=100", token=token)
-        profiles  = prof_resp.get("result", [])
+        # Fetch full profile details (list endpoint omits macVersion etc.)
+        prof_list = _gw_request("GET", "device-profiles?applicationID=1&limit=100", token=token)
+        profiles  = []
+        for item in prof_list.get("result", []):
+            try:
+                detail = _gw_request("GET", f"device-profiles/{item['id']}", token=token)
+                profiles.append(detail.get("deviceProfile", item))
+            except Exception as exc:
+                print(f"Gateway: profile detail {item['id']} failed: {exc}", file=sys.stderr)
+                profiles.append(item)
 
         processed = []
         for addition in pending:
