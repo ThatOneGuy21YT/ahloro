@@ -766,6 +766,11 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_auth_logout()
             return
 
+        # Poller-facing API routes — authenticated by API key, not browser session
+        if self.path == "/pending_gateway_deletions":
+            self._serve_pending_gateway_deletions()
+            return
+
         if not self._check_browser_auth():
             return
 
@@ -789,8 +794,6 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_log_data()
         elif self.path == "/poller_status":
             self._serve_poller_status()
-        elif self.path == "/pending_gateway_deletions":
-            self._serve_pending_gateway_deletions()
         else:
             self._serve_static()
 
