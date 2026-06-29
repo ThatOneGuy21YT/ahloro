@@ -28,4 +28,6 @@ Sound Devices are in testing and have not been properly configured, do not use f
 I plan to implement the ability to gain data from multiple gateways at once from different brands as I get the ability to, though it is not the primary goal at this time.
 
 # Dependencies
+a computer??????
 psycopg2
+postgresql
