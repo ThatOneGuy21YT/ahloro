@@ -273,39 +273,68 @@ def _process_gateway_additions():
 
         processed = []
         for addition in pending:
-            eui  = addition.get("devEUI", "").upper()
-            mode = addition.get("mode", "OTAA")
-            name = addition.get("name", eui)
+            eui          = addition.get("devEUI", "").upper()
+            mode         = addition.get("mode", "OTAA")
+            name         = addition.get("name", eui)
+            lorawan_spec = addition.get("lorawanSpec", "")
+            device_class = addition.get("deviceClass", "A")
             try:
-                # Pick profile: prefer one whose supportsJoin matches mode
-                wants_join = (mode == "OTAA")
-                profile_id = next(
-                    (p["id"] for p in profiles if p.get("supportsJoin") == wants_join),
-                    profiles[0]["id"] if profiles else None,
-                )
+                wants_join    = (mode == "OTAA")
+                wants_class_c = (device_class == "C")
+
+                def _profile_score(p):
+                    score = 0
+                    if p.get("supportsJoin") == wants_join:
+                        score += 1000
+                    mac = p.get("macVersion", "")
+                    if mac and lorawan_spec:
+                        if mac == lorawan_spec:
+                            score += 100
+                        else:
+                            mp = mac.split(".")
+                            sp = lorawan_spec.split(".")
+                            if len(mp) >= 2 and len(sp) >= 2 and mp[:2] == sp[:2]:
+                                score += 40  # same major.minor
+                            elif mp[:1] == sp[:1]:
+                                score += 10  # same major
+                    if wants_class_c and p.get("supportsClassC"):
+                        score += 20
+                    elif not wants_class_c and not p.get("supportsClassC"):
+                        score += 20
+                    return score
+
+                best = max(profiles, key=_profile_score) if profiles else None
+                profile_id = best["id"] if best else None
                 if not profile_id:
                     print(f"Gateway add {eui}: no device profiles configured", file=sys.stderr)
-                    processed.append(eui)   # remove from queue; user must fix profile
+                    processed.append(eui)
                     continue
+                print(f"Gateway add {eui}: profile '{best.get('name')}' mac={best.get('macVersion')} join={best.get('supportsJoin')}")
 
                 _gw_request("POST", "devices", token=token, body={
                     "device": {
-                        "applicationID": "1",
-                        "devEUI":         eui,
-                        "name":           name,
+                        "applicationID":  "1",
+                        "devEUI":          eui,
+                        "name":            name,
                         "deviceProfileID": profile_id,
-                        "description":    "",
-                        "skipFCntCheck":  False,
+                        "description":     "",
+                        "skipFCntCheck":   False,
                     }
                 })
 
                 if mode == "OTAA":
                     app_key  = addition.get("appKey", "")
                     join_eui = addition.get("joinEUI") or "0000000000000000"
+                    print(f"Gateway add {eui}: OTAA joinEUI={join_eui} appKey={app_key[:8]}...")
+                    # ChirpStack v3 proto dropped appEUI from DeviceKeys in later versions.
+                    # Send both camelCase variants so whichever proto version the gateway
+                    # uses will accept it; unknown fields are silently dropped by grpc-gateway.
                     _gw_request("POST", f"devices/{eui}/keys", token=token, body={
                         "deviceKeys": {
                             "devEUI": eui,
-                            "appEUI": join_eui,
+                            "appEUI": join_eui,  # older ChirpStack v3
+                            "appEui": join_eui,  # proto JSON camelCase of app_eui
+                            "joinEUI": join_eui,  # v4-style / DFRobot custom
                             "nwkKey": app_key,
                             "appKey": app_key,
                         }
