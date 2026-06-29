@@ -65,9 +65,6 @@ _EUI_OVERRIDES: dict[str, str] = {
     "A840411D595FBEFE": DOOR,
 }
 
-# ── Door sensor specifics (from dflorawan_probe.py) ───────────────────────────
-_DOOR_THRESHOLD = 0x0050000000000000000000
-
 # ── Analog threshold defaults ─────────────────────────────────────────────────
 _TEMP_HIGH_C    = 30.0    # above this → value=0 (HIGH)
 _TILT_THRESHOLD = 15.0    # degrees from vertical → value=0 (TILTED)
@@ -166,6 +163,47 @@ def set_button_byte_config(check_byte: int, hold_value: int, double_value: int =
     _button_byte_config["double_value"] = int(double_value)
 
 
+# ── Door byte config (configurable at runtime) ────────────────────────────────
+# Reads one byte; non-zero → OPEN (value=0), zero → CLOSED (value=1).
+_door_byte_config: dict = {"check_byte": 0}
+
+
+def get_door_byte_config() -> dict:
+    return dict(_door_byte_config)
+
+
+def set_door_byte_config(check_byte: int) -> None:
+    _door_byte_config["check_byte"] = int(check_byte)
+
+
+# ── Motion byte config (configurable at runtime) ──────────────────────────────
+# Reads one byte; non-zero → DETECTED (value=0), zero → CLEAR (value=1).
+# Default 5 matches the legacy _decode_binary_generic behaviour.
+_motion_byte_config: dict = {"check_byte": 5}
+
+
+def get_motion_byte_config() -> dict:
+    return dict(_motion_byte_config)
+
+
+def set_motion_byte_config(check_byte: int) -> None:
+    _motion_byte_config["check_byte"] = int(check_byte)
+
+
+# ── Generic byte config (configurable at runtime) ─────────────────────────────
+# Reads one byte; non-zero → ACTIVE (value=0), zero → INACTIVE (value=1).
+# Default 5 matches the legacy _decode_binary_generic behaviour.
+_generic_byte_config: dict = {"check_byte": 5}
+
+
+def get_generic_byte_config() -> dict:
+    return dict(_generic_byte_config)
+
+
+def set_generic_byte_config(check_byte: int) -> None:
+    _generic_byte_config["check_byte"] = int(check_byte)
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def classify_device(name: str, dev_eui: str, raw_hex: str | None = None) -> str:
@@ -210,7 +248,9 @@ def decode_payload(device_type: str, dev_eui: str, raw_hex: str) -> dict:
         return result
 
     if device_type == DOOR:
-        _decode_door(raw_hex, result)
+        _decode_binary_check(data, result, _door_byte_config["check_byte"])
+    elif device_type == MOTION:
+        _decode_binary_check(data, result, _motion_byte_config["check_byte"])
     elif device_type == BUTTON:
         _decode_button(data, result)
     elif device_type == TEMPERATURE:
@@ -222,6 +262,8 @@ def decode_payload(device_type: str, dev_eui: str, raw_hex: str) -> dict:
     elif device_type == TILT:
         result["unit"] = "°"
         _decode_tilt(data, result)
+    elif device_type == GENERIC:
+        _decode_binary_check(data, result, _generic_byte_config["check_byte"])
     else:
         _decode_binary_generic(data, result)
 
@@ -247,15 +289,22 @@ def get_unit(device_type: str) -> str | None:
 
 # ── Internal decoders ─────────────────────────────────────────────────────────
 
-def _decode_door(raw_hex: str, r: dict) -> None:
+def _decode_binary_check(data: bytes, r: dict, check_byte: int, invert: bool = False) -> None:
+    """Read one configurable byte; non-zero → active (value=0), zero → inactive (value=1).
+    invert=True flips the sense: non-zero → inactive (value=1), zero → active (value=0).
+    Falls back to the last byte when check_byte is out of range."""
     try:
-        r["value"] = 0 if int(raw_hex, 16) > _DOOR_THRESHOLD else 1
-    except ValueError:
-        pass
+        nonzero = data[check_byte] != 0
+    except IndexError:
+        nonzero = bool(data) and data[-1] != 0
+    if invert:
+        r["value"] = 1 if nonzero else 0
+    else:
+        r["value"] = 0 if nonzero else 1
 
 
 def _decode_binary_generic(data: bytes, r: dict) -> None:
-    """byte[5] != 0 → active (value=0)."""
+    """Legacy fallback for unknown types: byte[5] or last byte."""
     if len(data) > 5:
         r["value"] = 0 if data[5] != 0 else 1
     elif data:

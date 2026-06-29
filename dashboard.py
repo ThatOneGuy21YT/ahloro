@@ -71,6 +71,10 @@ _button_expire_seconds: float = 1.0
 _last_poller_contact:   float = 0.0
 _POLLER_TIMEOUT               = 120.0   # seconds before poller is considered offline
 
+_pending_gw_deletions:  set[str]  = set()
+_pending_gw_additions:  list[dict] = []
+_pending_gw_lock = threading.Lock()
+
 
 def _load_dotenv():
     path = os.path.join(DIR, ".env")
@@ -552,6 +556,18 @@ def _load_stats_from_db():
                 sc["little_endian"], sc["loud_db"],
             )
 
+        dc = config.get("door_byte_config", {})
+        if "check_byte" in dc:
+            device_classifier.set_door_byte_config(dc["check_byte"])
+
+        mc = config.get("motion_byte_config", {})
+        if "check_byte" in mc:
+            device_classifier.set_motion_byte_config(mc["check_byte"])
+
+        gc = config.get("generic_byte_config", {})
+        if "check_byte" in gc:
+            device_classifier.set_generic_byte_config(gc["check_byte"])
+
         global _button_expire_seconds
         bes = config.get("button_expire_seconds")
         if isinstance(bes, (int, float)) and 0.1 <= bes <= 3600:
@@ -610,6 +626,9 @@ def _persist_stats(*, immediate: bool = False):
                 "temp_byte_config":      device_classifier.get_temp_byte_config(),
                 "button_byte_config":    device_classifier.get_button_byte_config(),
                 "sound_byte_config":     device_classifier.get_sound_byte_config(),
+                "door_byte_config":      device_classifier.get_door_byte_config(),
+                "motion_byte_config":    device_classifier.get_motion_byte_config(),
+                "generic_byte_config":   device_classifier.get_generic_byte_config(),
                 "button_expire_seconds": _button_expire_seconds,
             }.items():
                 cur.execute(
@@ -763,6 +782,14 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_auth_logout()
             return
 
+        # Poller-facing API routes — authenticated by API key, not browser session
+        if self.path == "/pending_gateway_deletions":
+            self._serve_pending_gateway_deletions()
+            return
+        if self.path == "/pending_gateway_additions":
+            self._serve_pending_gateway_additions()
+            return
+
         if not self._check_browser_auth():
             return
 
@@ -782,6 +809,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response(200, {"seconds": _button_expire_seconds})
         elif self.path == "/sound_byte_config":
             self._json_response(200, device_classifier.get_sound_byte_config())
+        elif self.path == "/door_byte_config":
+            self._json_response(200, device_classifier.get_door_byte_config())
+        elif self.path == "/motion_byte_config":
+            self._json_response(200, device_classifier.get_motion_byte_config())
+        elif self.path == "/generic_byte_config":
+            self._json_response(200, device_classifier.get_generic_byte_config())
         elif self.path.startswith("/log_data"):
             self._serve_log_data()
         elif self.path == "/poller_status":
@@ -808,6 +841,20 @@ class Handler(BaseHTTPRequestHandler):
             if self._check_browser_auth(): self._handle_set_button_expire_seconds()
         elif self.path == "/set_sound_byte_config":
             if self._check_browser_auth(): self._handle_set_sound_byte_config()
+        elif self.path == "/set_door_byte_config":
+            if self._check_browser_auth(): self._handle_set_door_byte_config()
+        elif self.path == "/set_motion_byte_config":
+            if self._check_browser_auth(): self._handle_set_motion_byte_config()
+        elif self.path == "/set_generic_byte_config":
+            if self._check_browser_auth(): self._handle_set_generic_byte_config()
+        elif self.path == "/add_device":
+            if self._check_browser_auth(): self._handle_add_device()
+        elif self.path == "/delete_device":
+            if self._check_browser_auth(): self._handle_delete_device()
+        elif self.path == "/confirm_gateway_deletions":
+            self._handle_confirm_gateway_deletions()
+        elif self.path == "/confirm_gateway_additions":
+            self._handle_confirm_gateway_additions()
         else:
             self.send_response(404)
             self.end_headers()
@@ -1226,6 +1273,100 @@ class Handler(BaseHTTPRequestHandler):
         _device_states.pop(eui, None)
         self._json_response(200, {"ok": True})
 
+    def _handle_delete_device(self):
+        """Browser-initiated device deletion."""
+        try:
+            body = self._read_json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._json_response(400, {"success": False, "error": str(exc)})
+            return
+
+        eui = body.get("devEUI", "").upper()
+        if not eui:
+            self._json_response(400, {"success": False, "error": "devEUI required"})
+            return
+
+        _remove_device_from_db(eui)
+        _device_states.pop(eui, None)
+
+        with _device_registry_lock:
+            _device_registry[:] = [d for d in _device_registry
+                                    if d.get("devEUI", "").upper() != eui]
+            remaining = [_build_device_out(d) for d in _device_registry]
+
+        with _pending_gw_lock:
+            _pending_gw_deletions.add(eui)
+
+        broadcast({"devices_update": remaining})
+        self._json_response(200, {"success": True})
+
+    # ── Gateway deletion coordination (poller ↔ dashboard) ───────────────────
+
+    def _serve_pending_gateway_deletions(self):
+        if not self._check_api_key():
+            return
+        with _pending_gw_lock:
+            euids = list(_pending_gw_deletions)
+        self._json_response(200, {"euids": euids})
+
+    def _handle_confirm_gateway_deletions(self):
+        if not self._check_api_key():
+            return
+        try:
+            body = self._read_json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._json_response(400, {"error": str(exc)})
+            return
+        confirmed = [e.upper() for e in body.get("euids", [])]
+        with _pending_gw_lock:
+            _pending_gw_deletions.difference_update(confirmed)
+        self._json_response(200, {"ok": True})
+
+    def _serve_pending_gateway_additions(self):
+        if not self._check_api_key():
+            return
+        with _pending_gw_lock:
+            items = list(_pending_gw_additions)
+        self._json_response(200, {"additions": items})
+
+    def _handle_confirm_gateway_additions(self):
+        if not self._check_api_key():
+            return
+        try:
+            body = self._read_json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._json_response(400, {"error": str(exc)})
+            return
+        confirmed = {e.upper() for e in body.get("euids", [])}
+        with _pending_gw_lock:
+            _pending_gw_additions[:] = [
+                a for a in _pending_gw_additions
+                if a.get("devEUI", "").upper() not in confirmed
+            ]
+        self._json_response(200, {"ok": True})
+
+    def _handle_add_device(self):
+        try:
+            body = self._read_json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._json_response(400, {"success": False, "error": str(exc)})
+            return
+
+        eui  = body.get("devEUI", "").upper()
+        mode = body.get("mode", "OTAA")
+        if len(eui) != 16:
+            self._json_response(400, {"success": False, "error": "devEUI must be 16 hex characters"})
+            return
+        if mode not in ("OTAA", "ABP"):
+            self._json_response(400, {"success": False, "error": "mode must be OTAA or ABP"})
+            return
+
+        addition = {**body, "devEUI": eui}
+        with _pending_gw_lock:
+            _pending_gw_additions.append(addition)
+
+        self._json_response(200, {"success": True})
+
     # ── Poller status API ─────────────────────────────────────────────────────
 
     def _serve_poller_status(self):
@@ -1537,6 +1678,39 @@ class Handler(BaseHTTPRequestHandler):
         device_classifier.set_sound_byte_config(start, size, divisor, little_endian, loud_db)
         _persist_stats(immediate=True)
         self._json_response(200, {"success": True, **device_classifier.get_sound_byte_config()})
+
+    def _handle_set_door_byte_config(self):
+        self._handle_set_simple_check_byte("door")
+
+    def _handle_set_motion_byte_config(self):
+        self._handle_set_simple_check_byte("motion")
+
+    def _handle_set_generic_byte_config(self):
+        self._handle_set_simple_check_byte("generic")
+
+    def _handle_set_simple_check_byte(self, sensor_type: str):
+        try:
+            body       = self._read_json()
+            check_byte = int(body["check_byte"])
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            self._json_response(400, {"success": False,
+                                      "error": "check_byte must be an integer"}); return
+        if check_byte < -1 or check_byte > 60:
+            self._json_response(400, {"success": False,
+                                      "error": "check_byte must be −1 or 0–60"}); return
+        setters = {
+            "door":    device_classifier.set_door_byte_config,
+            "motion":  device_classifier.set_motion_byte_config,
+            "generic": device_classifier.set_generic_byte_config,
+        }
+        getters = {
+            "door":    device_classifier.get_door_byte_config,
+            "motion":  device_classifier.get_motion_byte_config,
+            "generic": device_classifier.get_generic_byte_config,
+        }
+        setters[sensor_type](check_byte)
+        _persist_stats(immediate=True)
+        self._json_response(200, {"success": True, **getters[sensor_type]()})
 
     # ── Shared response helper ────────────────────────────────────────────────
 

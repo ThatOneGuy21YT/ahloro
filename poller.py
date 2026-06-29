@@ -199,11 +199,178 @@ def _post_devices_update():
 # ── Device initialisation ─────────────────────────────────────────────────────
 
 
+def _gw_login() -> str:
+    auth = _gw_request("POST", "internal/login", {"email": GW_EMAIL, "password": GW_PASS})
+    return auth["jwt"]
+
+
 def _fetch_gateway_devices() -> list:
-    auth  = _gw_request("POST", "internal/login", {"email": GW_EMAIL, "password": GW_PASS})
-    token = auth["jwt"]
+    token = _gw_login()
     resp  = _gw_request("GET", "devices?limit=100&applicationID=1", token=token)
     return resp.get("result", [])
+
+
+def _get_pending_gateway_deletions() -> list[str]:
+    url     = f"{DASHBOARD_URL}/pending_gateway_deletions"
+    headers = {}
+    if API_KEY:
+        headers["X-Api-Key"] = API_KEY
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read()).get("euids", [])
+    except Exception as exc:
+        print(f"GET pending_gateway_deletions error: {exc}", file=sys.stderr)
+        return []
+
+
+def _process_gateway_deletions():
+    """Delete any dashboard-requested devices from the gateway, then confirm."""
+    pending = _get_pending_gateway_deletions()
+    if not pending:
+        return
+    try:
+        token   = _gw_login()
+        deleted = []
+        for eui in pending:
+            try:
+                _gw_request("DELETE", f"devices/{eui}", token=token)
+                _device_states.pop(eui, None)
+                _device_type_store.pop(eui, None)
+                deleted.append(eui)
+                print(f"Gateway: deleted device {eui}")
+            except Exception as exc:
+                print(f"Gateway: delete {eui} failed: {exc}", file=sys.stderr)
+        if deleted:
+            _post_to_dashboard("/confirm_gateway_deletions", {"euids": deleted})
+    except Exception as exc:
+        print(f"Gateway deletion login error: {exc}", file=sys.stderr)
+
+
+def _get_pending_gateway_additions() -> list:
+    url     = f"{DASHBOARD_URL}/pending_gateway_additions"
+    headers = {"X-Api-Key": API_KEY} if API_KEY else {}
+    req     = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read()).get("additions", [])
+    except Exception as exc:
+        print(f"GET pending_gateway_additions error: {exc}", file=sys.stderr)
+        return []
+
+
+def _process_gateway_additions():
+    """Create any dashboard-requested devices on the gateway, then confirm."""
+    pending = _get_pending_gateway_additions()
+    if not pending:
+        return
+    try:
+        token = _gw_login()
+
+        # Fetch full profile details (list endpoint omits macVersion etc.)
+        prof_list = _gw_request("GET", "device-profiles?applicationID=1&limit=100", token=token)
+        profiles  = []
+        for item in prof_list.get("result", []):
+            try:
+                detail = _gw_request("GET", f"device-profiles/{item['id']}", token=token)
+                profiles.append(detail.get("deviceProfile", item))
+            except Exception as exc:
+                print(f"Gateway: profile detail {item['id']} failed: {exc}", file=sys.stderr)
+                profiles.append(item)
+
+        processed = []
+        for addition in pending:
+            eui          = addition.get("devEUI", "").upper()
+            mode         = addition.get("mode", "OTAA")
+            name         = addition.get("name", eui)
+            lorawan_spec = addition.get("lorawanSpec", "")
+            device_class = addition.get("deviceClass", "A")
+            try:
+                wants_join    = (mode == "OTAA")
+                wants_class_c = (device_class == "C")
+
+                def _profile_score(p):
+                    score = 0
+                    if p.get("supportsJoin") == wants_join:
+                        score += 1000
+                    mac = p.get("macVersion", "")
+                    if mac and lorawan_spec:
+                        if mac == lorawan_spec:
+                            score += 100
+                        else:
+                            mp = mac.split(".")
+                            sp = lorawan_spec.split(".")
+                            if len(mp) >= 2 and len(sp) >= 2 and mp[:2] == sp[:2]:
+                                score += 40  # same major.minor
+                            elif mp[:1] == sp[:1]:
+                                score += 10  # same major
+                    if wants_class_c and p.get("supportsClassC"):
+                        score += 20
+                    elif not wants_class_c and not p.get("supportsClassC"):
+                        score += 20
+                    return score
+
+                best = max(profiles, key=_profile_score) if profiles else None
+                profile_id = best["id"] if best else None
+                if not profile_id:
+                    print(f"Gateway add {eui}: no device profiles configured", file=sys.stderr)
+                    processed.append(eui)
+                    continue
+                print(f"Gateway add {eui}: profile '{best.get('name')}' mac={best.get('macVersion')} join={best.get('supportsJoin')}")
+
+                _gw_request("POST", "devices", token=token, body={
+                    "device": {
+                        "applicationID":  "1",
+                        "devEUI":          eui,
+                        "name":            name,
+                        "deviceProfileID": profile_id,
+                        "description":     "",
+                        "skipFCntCheck":   False,
+                    }
+                })
+
+                if mode == "OTAA":
+                    app_key  = addition.get("appKey", "")
+                    join_eui = addition.get("joinEUI") or "0000000000000000"
+                    print(f"Gateway add {eui}: OTAA joinEUI={join_eui} appKey={app_key[:8]}...")
+                    # ChirpStack v3 proto dropped appEUI from DeviceKeys in later versions.
+                    # Send both camelCase variants so whichever proto version the gateway
+                    # uses will accept it; unknown fields are silently dropped by grpc-gateway.
+                    _gw_request("POST", f"devices/{eui}/keys", token=token, body={
+                        "deviceKeys": {
+                            "devEUI": eui,
+                            "appEUI": join_eui,  # older ChirpStack v3
+                            "appEui": join_eui,  # proto JSON camelCase of app_eui
+                            "joinEUI": join_eui,  # v4-style / DFRobot custom
+                            "nwkKey": app_key,
+                            "appKey": app_key,
+                        }
+                    })
+                else:
+                    nwk = addition.get("nwkSKey", "")
+                    _gw_request("POST", f"devices/{eui}/activation", token=token, body={
+                        "deviceActivation": {
+                            "devEUI":        eui,
+                            "devAddr":       addition.get("devAddr", ""),
+                            "appSKey":       addition.get("appSKey", ""),
+                            "nwkSKey":       nwk,
+                            "fNwkSIntKey":   nwk,
+                            "sNwkSIntKey":   nwk,
+                            "nwkSessionKey": nwk,
+                        }
+                    })
+
+                print(f"Gateway: added device '{name}' ({eui}) [{mode}]")
+            except Exception as exc:
+                print(f"Gateway: add {eui} failed: {exc}", file=sys.stderr)
+            finally:
+                processed.append(eui)   # confirm regardless so queue doesn't grow
+
+        if processed:
+            _post_to_dashboard("/confirm_gateway_additions", {"euids": processed})
+
+    except Exception as exc:
+        print(f"Gateway additions error: {exc}", file=sys.stderr)
 
 
 def init_devices():
@@ -237,6 +404,8 @@ def device_status_refresh():
     while True:
         time.sleep(DEVICE_STATUS_REFRESH)
         try:
+            _process_gateway_deletions()
+            _process_gateway_additions()
             fresh       = _fetch_gateway_devices()
             fresh_euids = {d["devEUI"].upper() for d in fresh}
 
