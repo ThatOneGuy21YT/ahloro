@@ -942,6 +942,21 @@
     <span class="btn-label">Byte Offsets</span>
   </button>
 
+  <button class="tilt-cfg-btn" id="door-cfg-btn" onclick="openDoorConfigDialog()" title="Configure door sensor byte offset" style="display:none">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
+    <span class="btn-label">Byte Offset</span>
+  </button>
+
+  <button class="tilt-cfg-btn" id="motion-cfg-btn" onclick="openMotionConfigDialog()" title="Configure motion sensor byte offset" style="display:none">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
+    <span class="btn-label">Byte Offset</span>
+  </button>
+
+  <button class="tilt-cfg-btn" id="generic-cfg-btn" onclick="openGenericConfigDialog()" title="Configure generic sensor byte offset" style="display:none">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
+    <span class="btn-label">Byte Offset</span>
+  </button>
+
   <button class="tilt-cfg-btn" id="button-expire-btn" onclick="openButtonExpireDialog()" title="Configure button press expiry duration" style="display:none">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61l1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.962 8.962 0 0012 4c-4.97 0-9 4.03-9 9s4.02 9 9 9 9-4.03 9-9c0-2.12-.74-4.07-1.97-5.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>
     <span class="btn-label">Expiry Timer</span>
@@ -1321,6 +1336,96 @@
     <div class="dialog-actions">
       <button class="btn-cancel" onclick="closeSoundConfigDialog()">Cancel</button>
       <button class="btn-submit" id="sc-submit" onclick="saveSoundByteConfig()">Save</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ── Door byte config dialog ── -->
+<dialog id="door-config-dialog">
+  <div class="dialog-inner">
+    <div class="dialog-title">
+      <span>Door Sensor Byte Offset</span>
+      <button class="dialog-close" onclick="closeDoorConfigDialog()" title="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    </div>
+    <p class="dialog-hint" style="margin-top:0;margin-bottom:20px">
+      Specify which byte to read for open/closed detection. −1 reads the last byte of the payload.
+      Any non-zero value is OPEN; zero is CLOSED.
+    </p>
+    <div class="field-group">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="field" style="flex:0 0 160px">
+          <label>Check byte (−1 = last)</label>
+          <input id="door-byte" type="number" min="-1" max="60" oninput="updateDoorPreview()">
+        </div>
+        <span class="tilt-bytes-preview" id="door-preview">last byte</span>
+      </div>
+    </div>
+    <div id="door-msg" class="dialog-msg"></div>
+    <div class="dialog-actions">
+      <button class="btn-cancel" onclick="closeDoorConfigDialog()">Cancel</button>
+      <button class="btn-submit" id="door-submit" onclick="saveDoorByteConfig()">Save</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ── Motion byte config dialog ── -->
+<dialog id="motion-config-dialog">
+  <div class="dialog-inner">
+    <div class="dialog-title">
+      <span>Motion Sensor Byte Offset</span>
+      <button class="dialog-close" onclick="closeMotionConfigDialog()" title="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    </div>
+    <p class="dialog-hint" style="margin-top:0;margin-bottom:20px">
+      Specify which byte to read for motion detection. −1 reads the last byte of the payload.
+      Any non-zero value is DETECTED; zero is CLEAR.
+    </p>
+    <div class="field-group">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="field" style="flex:0 0 160px">
+          <label>Check byte (−1 = last)</label>
+          <input id="motion-byte" type="number" min="-1" max="60" oninput="updateMotionPreview()">
+        </div>
+        <span class="tilt-bytes-preview" id="motion-preview">byte 5</span>
+      </div>
+    </div>
+    <div id="motion-msg" class="dialog-msg"></div>
+    <div class="dialog-actions">
+      <button class="btn-cancel" onclick="closeMotionConfigDialog()">Cancel</button>
+      <button class="btn-submit" id="motion-submit" onclick="saveMotionByteConfig()">Save</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ── Generic byte config dialog ── -->
+<dialog id="generic-config-dialog">
+  <div class="dialog-inner">
+    <div class="dialog-title">
+      <span>Generic Sensor Byte Offset</span>
+      <button class="dialog-close" onclick="closeGenericConfigDialog()" title="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    </div>
+    <p class="dialog-hint" style="margin-top:0;margin-bottom:20px">
+      Specify which byte to read for state detection. −1 reads the last byte of the payload.
+      Any non-zero value is ACTIVE; zero is INACTIVE.
+    </p>
+    <div class="field-group">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="field" style="flex:0 0 160px">
+          <label>Check byte (−1 = last)</label>
+          <input id="generic-byte" type="number" min="-1" max="60" oninput="updateGenericPreview()">
+        </div>
+        <span class="tilt-bytes-preview" id="generic-preview">byte 5</span>
+      </div>
+    </div>
+    <div id="generic-msg" class="dialog-msg"></div>
+    <div class="dialog-actions">
+      <button class="btn-cancel" onclick="closeGenericConfigDialog()">Cancel</button>
+      <button class="btn-submit" id="generic-submit" onclick="saveGenericByteConfig()">Save</button>
     </div>
   </div>
 </dialog>
@@ -2561,16 +2666,22 @@ function applyDeviceType(eui, type) {
   // Byte-offset config buttons live in the app bar (not per-widget), so only
   // update them when we're processing the currently selected device.
   if (eui === selectedEUI) {
-    const cfgBtn    = document.getElementById('tilt-cfg-btn');
-    const tcfgBtn   = document.getElementById('temp-cfg-btn');
-    const scfgBtn   = document.getElementById('sound-cfg-btn');
-    const bcfgBtn   = document.getElementById('button-cfg-btn');
-    const expireBtn = document.getElementById('button-expire-btn');
-    if (cfgBtn)    cfgBtn.style.display    = isGyro                ? '' : 'none';
-    if (tcfgBtn)   tcfgBtn.style.display   = type === 'temperature' ? '' : 'none';
-    if (scfgBtn)   scfgBtn.style.display   = type === 'sound'       ? '' : 'none';
-    if (bcfgBtn)   bcfgBtn.style.display   = type === 'button'      ? '' : 'none';
-    if (expireBtn) expireBtn.style.display = type === 'button'      ? '' : 'none';
+    const cfgBtn      = document.getElementById('tilt-cfg-btn');
+    const tcfgBtn     = document.getElementById('temp-cfg-btn');
+    const scfgBtn     = document.getElementById('sound-cfg-btn');
+    const bcfgBtn     = document.getElementById('button-cfg-btn');
+    const expireBtn   = document.getElementById('button-expire-btn');
+    const doorCfgBtn  = document.getElementById('door-cfg-btn');
+    const motCfgBtn   = document.getElementById('motion-cfg-btn');
+    const genCfgBtn   = document.getElementById('generic-cfg-btn');
+    if (cfgBtn)     cfgBtn.style.display     = isGyro                ? '' : 'none';
+    if (tcfgBtn)    tcfgBtn.style.display    = type === 'temperature' ? '' : 'none';
+    if (scfgBtn)    scfgBtn.style.display    = type === 'sound'       ? '' : 'none';
+    if (bcfgBtn)    bcfgBtn.style.display    = type === 'button'      ? '' : 'none';
+    if (expireBtn)  expireBtn.style.display  = type === 'button'      ? '' : 'none';
+    if (doorCfgBtn) doorCfgBtn.style.display = type === 'door'        ? '' : 'none';
+    if (motCfgBtn)  motCfgBtn.style.display  = type === 'motion'      ? '' : 'none';
+    if (genCfgBtn)  genCfgBtn.style.display  = type === 'generic'     ? '' : 'none';
     _syncDevsBtnIcon();
   }
 
@@ -2880,6 +2991,108 @@ async function saveSoundByteConfig() {
 
 document.getElementById('sound-config-dialog').addEventListener('click', e => {
   if (e.target === document.getElementById('sound-config-dialog')) closeSoundConfigDialog();
+});
+
+// ── Door / Motion / Generic byte config dialogs ───────────────────────────
+// All three follow the same pattern: one check_byte field, no other options.
+
+function _simpleBytePreview(inputId, previewId) {
+  const n = parseInt(document.getElementById(inputId).value);
+  document.getElementById(previewId).textContent =
+    isNaN(n) ? 'invalid' : n === -1 ? 'last byte' : `byte ${n}`;
+}
+function updateDoorPreview()    { _simpleBytePreview('door-byte',    'door-preview'); }
+function updateMotionPreview()  { _simpleBytePreview('motion-byte',  'motion-preview'); }
+function updateGenericPreview() { _simpleBytePreview('generic-byte', 'generic-preview'); }
+
+async function _fetchSimpleByteConfig(endpoint) {
+  try {
+    const resp = await fetch(endpoint);
+    if (resp.ok) return (await resp.json()).check_byte ?? -1;
+  } catch (_) {}
+  return -1;
+}
+
+let _doorCheckByte    = -1;
+let _motionCheckByte  = 5;
+let _genericCheckByte = 5;
+
+async function fetchDoorByteConfig()    { _doorCheckByte    = await _fetchSimpleByteConfig('/door_byte_config'); }
+async function fetchMotionByteConfig()  { _motionCheckByte  = await _fetchSimpleByteConfig('/motion_byte_config'); }
+async function fetchGenericByteConfig() { _genericCheckByte = await _fetchSimpleByteConfig('/generic_byte_config'); }
+
+function _openSimpleByteDialog(dialogId, inputId, previewId, currentVal, previewFn) {
+  document.getElementById(inputId).value = currentVal;
+  previewFn();
+  const d = document.getElementById(dialogId);
+  const msgEl = d.querySelector('[id$="-msg"]');
+  if (msgEl) { msgEl.className = 'dialog-msg'; msgEl.textContent = ''; }
+  const submitEl = d.querySelector('[id$="-submit"]');
+  if (submitEl) submitEl.disabled = false;
+  d.showModal();
+}
+
+function openDoorConfigDialog() {
+  _openSimpleByteDialog('door-config-dialog', 'door-byte', 'door-preview', _doorCheckByte, updateDoorPreview);
+}
+function openMotionConfigDialog() {
+  _openSimpleByteDialog('motion-config-dialog', 'motion-byte', 'motion-preview', _motionCheckByte, updateMotionPreview);
+}
+function openGenericConfigDialog() {
+  _openSimpleByteDialog('generic-config-dialog', 'generic-byte', 'generic-preview', _genericCheckByte, updateGenericPreview);
+}
+
+function closeDoorConfigDialog()    { document.getElementById('door-config-dialog').close(); }
+function closeMotionConfigDialog()  { document.getElementById('motion-config-dialog').close(); }
+function closeGenericConfigDialog() { document.getElementById('generic-config-dialog').close(); }
+
+async function _saveSimpleByteConfig(endpoint, inputId, msgId, submitId, closeFn, storeCallback) {
+  const check_byte = parseInt(document.getElementById(inputId).value);
+  const msg        = document.getElementById(msgId);
+  if (isNaN(check_byte) || check_byte < -1 || check_byte > 60) {
+    msg.className = 'dialog-msg error';
+    msg.textContent = 'Check byte must be −1 (last) or 0–60.'; return;
+  }
+  const btn = document.getElementById(submitId);
+  btn.disabled = true; msg.className = 'dialog-msg'; msg.textContent = '';
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ check_byte }),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      storeCallback(data.check_byte ?? check_byte);
+      closeFn();
+    } else {
+      msg.className = 'dialog-msg error';
+      msg.textContent = data.error || 'Failed to save.';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    msg.className = 'dialog-msg error';
+    msg.textContent = 'Network error — could not reach server.';
+    btn.disabled = false;
+  }
+}
+
+function saveDoorByteConfig() {
+  _saveSimpleByteConfig('/set_door_byte_config', 'door-byte', 'door-msg', 'door-submit',
+    closeDoorConfigDialog, v => { _doorCheckByte = v; });
+}
+function saveMotionByteConfig() {
+  _saveSimpleByteConfig('/set_motion_byte_config', 'motion-byte', 'motion-msg', 'motion-submit',
+    closeMotionConfigDialog, v => { _motionCheckByte = v; });
+}
+function saveGenericByteConfig() {
+  _saveSimpleByteConfig('/set_generic_byte_config', 'generic-byte', 'generic-msg', 'generic-submit',
+    closeGenericConfigDialog, v => { _genericCheckByte = v; });
+}
+
+['door-config-dialog','motion-config-dialog','generic-config-dialog'].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener('click', e => { if (e.target === el) el.close(); });
 });
 
 // ── Button byte config dialog ──────────────────────────────────────────────
@@ -3454,6 +3667,9 @@ fetchTiltByteConfig();
 fetchTempByteConfig();
 fetchButtonByteConfig();
 fetchButtonExpireSeconds();
+fetchDoorByteConfig();
+fetchMotionByteConfig();
+fetchGenericByteConfig();
 connect();
 _fetchCurrentUser();
 

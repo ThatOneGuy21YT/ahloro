@@ -556,6 +556,18 @@ def _load_stats_from_db():
                 sc["little_endian"], sc["loud_db"],
             )
 
+        dc = config.get("door_byte_config", {})
+        if "check_byte" in dc:
+            device_classifier.set_door_byte_config(dc["check_byte"])
+
+        mc = config.get("motion_byte_config", {})
+        if "check_byte" in mc:
+            device_classifier.set_motion_byte_config(mc["check_byte"])
+
+        gc = config.get("generic_byte_config", {})
+        if "check_byte" in gc:
+            device_classifier.set_generic_byte_config(gc["check_byte"])
+
         global _button_expire_seconds
         bes = config.get("button_expire_seconds")
         if isinstance(bes, (int, float)) and 0.1 <= bes <= 3600:
@@ -614,6 +626,9 @@ def _persist_stats(*, immediate: bool = False):
                 "temp_byte_config":      device_classifier.get_temp_byte_config(),
                 "button_byte_config":    device_classifier.get_button_byte_config(),
                 "sound_byte_config":     device_classifier.get_sound_byte_config(),
+                "door_byte_config":      device_classifier.get_door_byte_config(),
+                "motion_byte_config":    device_classifier.get_motion_byte_config(),
+                "generic_byte_config":   device_classifier.get_generic_byte_config(),
                 "button_expire_seconds": _button_expire_seconds,
             }.items():
                 cur.execute(
@@ -794,6 +809,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response(200, {"seconds": _button_expire_seconds})
         elif self.path == "/sound_byte_config":
             self._json_response(200, device_classifier.get_sound_byte_config())
+        elif self.path == "/door_byte_config":
+            self._json_response(200, device_classifier.get_door_byte_config())
+        elif self.path == "/motion_byte_config":
+            self._json_response(200, device_classifier.get_motion_byte_config())
+        elif self.path == "/generic_byte_config":
+            self._json_response(200, device_classifier.get_generic_byte_config())
         elif self.path.startswith("/log_data"):
             self._serve_log_data()
         elif self.path == "/poller_status":
@@ -820,6 +841,12 @@ class Handler(BaseHTTPRequestHandler):
             if self._check_browser_auth(): self._handle_set_button_expire_seconds()
         elif self.path == "/set_sound_byte_config":
             if self._check_browser_auth(): self._handle_set_sound_byte_config()
+        elif self.path == "/set_door_byte_config":
+            if self._check_browser_auth(): self._handle_set_door_byte_config()
+        elif self.path == "/set_motion_byte_config":
+            if self._check_browser_auth(): self._handle_set_motion_byte_config()
+        elif self.path == "/set_generic_byte_config":
+            if self._check_browser_auth(): self._handle_set_generic_byte_config()
         elif self.path == "/add_device":
             if self._check_browser_auth(): self._handle_add_device()
         elif self.path == "/delete_device":
@@ -1651,6 +1678,39 @@ class Handler(BaseHTTPRequestHandler):
         device_classifier.set_sound_byte_config(start, size, divisor, little_endian, loud_db)
         _persist_stats(immediate=True)
         self._json_response(200, {"success": True, **device_classifier.get_sound_byte_config()})
+
+    def _handle_set_door_byte_config(self):
+        self._handle_set_simple_check_byte("door")
+
+    def _handle_set_motion_byte_config(self):
+        self._handle_set_simple_check_byte("motion")
+
+    def _handle_set_generic_byte_config(self):
+        self._handle_set_simple_check_byte("generic")
+
+    def _handle_set_simple_check_byte(self, sensor_type: str):
+        try:
+            body       = self._read_json()
+            check_byte = int(body["check_byte"])
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            self._json_response(400, {"success": False,
+                                      "error": "check_byte must be an integer"}); return
+        if check_byte < -1 or check_byte > 60:
+            self._json_response(400, {"success": False,
+                                      "error": "check_byte must be −1 or 0–60"}); return
+        setters = {
+            "door":    device_classifier.set_door_byte_config,
+            "motion":  device_classifier.set_motion_byte_config,
+            "generic": device_classifier.set_generic_byte_config,
+        }
+        getters = {
+            "door":    device_classifier.get_door_byte_config,
+            "motion":  device_classifier.get_motion_byte_config,
+            "generic": device_classifier.get_generic_byte_config,
+        }
+        setters[sensor_type](check_byte)
+        _persist_stats(immediate=True)
+        self._json_response(200, {"success": True, **getters[sensor_type]()})
 
     # ── Shared response helper ────────────────────────────────────────────────
 
