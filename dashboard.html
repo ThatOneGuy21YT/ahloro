@@ -1058,7 +1058,7 @@
             <input id="ad-app-key" type="text" class="hex" placeholder="00000000000000000000000000000000" maxlength="47">
           </div>
           <div class="field">
-            <label>Join EUI</label>
+            <label>Join EUI <span class="required">*</span></label>
             <input id="ad-join-eui" type="text" class="hex" placeholder="0000000000000000" maxlength="19">
           </div>
         </div>
@@ -3342,7 +3342,7 @@ async function submitAddDevice() {
   if (devEUI.length !== 16) errors.push('Device EUI must be 16 hex characters');
   if (mode === 'OTAA') {
     if (appKey.length !== 32) errors.push('App Key must be 32 hex characters');
-    if (joinEUI.length !== 0 && joinEUI.length !== 16) errors.push('Join EUI must be empty or 16 hex characters');
+    if (joinEUI.length !== 16) errors.push('Join EUI must be 16 hex characters');
   } else {
     if (devAddr.length !== 8)  errors.push('Device Address must be 8 hex characters');
     if (appSKey.length !== 32) errors.push('App Session Key must be 32 hex characters');

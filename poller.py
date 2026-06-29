@@ -300,12 +300,16 @@ def _process_gateway_additions():
                 })
 
                 if mode == "OTAA":
-                    app_key = addition.get("appKey", "")
-                    keys    = {"devEUI": eui, "nwkKey": app_key, "appKey": app_key}
-                    if addition.get("joinEUI"):
-                        keys["appEUI"] = addition["joinEUI"]
-                    _gw_request("POST", f"devices/{eui}/keys", token=token,
-                                body={"deviceKeys": keys})
+                    app_key  = addition.get("appKey", "")
+                    join_eui = addition.get("joinEUI") or "0000000000000000"
+                    _gw_request("POST", f"devices/{eui}/keys", token=token, body={
+                        "deviceKeys": {
+                            "devEUI": eui,
+                            "appEUI": join_eui,
+                            "nwkKey": app_key,
+                            "appKey": app_key,
+                        }
+                    })
                 else:
                     nwk = addition.get("nwkSKey", "")
                     _gw_request("POST", f"devices/{eui}/activation", token=token, body={
