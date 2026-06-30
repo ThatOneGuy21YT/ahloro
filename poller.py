@@ -298,8 +298,9 @@ def _ug65_ensure_infrastructure(token: str) -> str:
     """
     global _ug65_app_id
     with _ug65_app_lock:
-        if _ug65_app_id:
+        if _ug65_app_id and _ug65_app_id != _UG65_FAILED:
             return _ug65_app_id
+        _ug65_app_id = None   # reset so we always retry after a failure
 
         # Check if an application already exists (try with and without org filter)
         for qs in ("applications?limit=10&organizationID=1", "applications?limit=10"):
@@ -311,8 +312,10 @@ def _ug65_ensure_infrastructure(token: str) -> str:
                     print(f"UG65: using existing application ID={_ug65_app_id}")
                     _ug65_setup_http_integration(token, _ug65_app_id)
                     return _ug65_app_id
+                print(f"UG65: GET {qs} → empty list")
                 break   # GET succeeded but list is empty — don't keep trying
-            except Exception:
+            except Exception as exc:
+                print(f"UG65: GET {qs} failed: {exc}", file=sys.stderr)
                 continue
 
         # Find any existing service profile (try less-restrictive paths first)
@@ -328,8 +331,11 @@ def _ug65_ensure_infrastructure(token: str) -> str:
                 if sps:
                     sp_id = str(sps[0]["id"])
                     print(f"UG65: using service profile ID={sp_id}")
+                else:
+                    print(f"UG65: GET {sp_qs} → empty list")
                 break
-            except Exception:
+            except Exception as exc:
+                print(f"UG65: GET {sp_qs} failed: {exc}", file=sys.stderr)
                 continue
 
         # Try to create an application (with sp_id, then without)
@@ -351,15 +357,7 @@ def _ug65_ensure_infrastructure(token: str) -> str:
             except Exception as exc:
                 print(f"UG65: application POST failed ({exc})", file=sys.stderr)
 
-        # The UG65's ChirpStack API does not allow creating applications externally.
-        # Ask the user to create one through the web UI; pick it up on next restart.
-        print(
-            "UG65: no application found and automatic creation failed.\n"
-            "      Please create an application named 'DoorSense' via the UG65 web UI,\n"
-            "      then restart the poller.  Until then, device listing is unavailable.",
-            file=sys.stderr,
-        )
-        _ug65_app_id = _UG65_FAILED
+        print("UG65: infrastructure setup failed — will retry next cycle", file=sys.stderr)
         return _UG65_FAILED
 
 
