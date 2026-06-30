@@ -69,12 +69,30 @@ LOGS_DIR = os.path.join(DIR, "logs")
 ONLINE_TIMEOUT         = 900
 _button_expire_seconds: float = 1.0
 _temp_unit: str = "C"   # "C" or "F"
-_last_poller_contact:   float = 0.0
 _POLLER_TIMEOUT               = 120.0   # seconds before poller is considered offline
 
-_pending_gw_deletions:  set[str]  = set()
-_pending_gw_additions:  list[dict] = []
+# Per-gateway poller tracking
+_poller_contacts: dict[str, float] = {}   # gateway_id → last contact unix time
+_known_gateways:  dict[str, dict]  = {}   # gateway_id → {id, name, last_contact}
+_gateways_lock = threading.Lock()
+
+# Per-gateway pending queues  {gateway_id: set/list}
+_pending_gw_deletions: dict[str, set]  = {}
+_pending_gw_additions: dict[str, list] = {}
 _pending_gw_lock = threading.Lock()
+
+
+def _update_poller_contact(gateway_id: str, gateway_name: str = ""):
+    now = time.time()
+    with _gateways_lock:
+        _poller_contacts[gateway_id] = now
+        if gateway_id not in _known_gateways:
+            _known_gateways[gateway_id] = {
+                "id":   gateway_id,
+                "name": gateway_name or gateway_id,
+            }
+        elif gateway_name:
+            _known_gateways[gateway_id]["name"] = gateway_name
 
 
 def _load_dotenv():
@@ -238,8 +256,12 @@ def _init_db():
             CREATE TABLE IF NOT EXISTS device_table_map (
                 dev_eui     TEXT PRIMARY KEY,
                 table_name  TEXT NOT NULL,
-                device_name TEXT
+                device_name TEXT,
+                gateway_id  TEXT DEFAULT 'dfrobot'
             )
+        """)
+        cur.execute("""
+            ALTER TABLE device_table_map ADD COLUMN IF NOT EXISTS gateway_id TEXT DEFAULT 'dfrobot'
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS device_stats (
@@ -329,10 +351,11 @@ def _ensure_device_table(dev_eui: str) -> str:
     _db_execute(
         f"CREATE INDEX IF NOT EXISTS idx_{table}_ts ON {table} (recorded_at DESC)"
     )
+    gw_id = _device_gateway.get(dev_eui, "dfrobot")
     _db_execute(
-        "INSERT INTO device_table_map (dev_eui, table_name, device_name) "
-        "VALUES (%s, %s, %s) ON CONFLICT (dev_eui) DO NOTHING",
-        (dev_eui, table, name),
+        "INSERT INTO device_table_map (dev_eui, table_name, device_name, gateway_id) "
+        "VALUES (%s, %s, %s, %s) ON CONFLICT (dev_eui) DO NOTHING",
+        (dev_eui, table, name, gw_id),
     )
     print(f"Created device table: {table} for {dev_eui}")
     _device_tables[dev_eui] = table
@@ -364,6 +387,7 @@ def _remove_device_from_db(dev_eui: str):
 # ── Device type store ─────────────────────────────────────────────────────────
 
 _device_type_store: dict[str, str] = {}
+_device_gateway:    dict[str, str] = {}   # EUI → gateway_id
 
 
 def _get_device_type(eui: str) -> str:
@@ -665,8 +689,13 @@ def _build_device_out(dev: dict) -> dict:
     ds  = _device_states.get(eui, {})
     l0, l1 = _device_label(eui)
     dtype   = _get_device_type(eui)
+    gw_id   = _device_gateway.get(eui, dev.get("gateway_id", "dfrobot"))
+    with _gateways_lock:
+        gw_name = _known_gateways.get(gw_id, {}).get("name", gw_id)
     return {
         **dev,
+        "gateway_id":          gw_id,
+        "gateway_name":        gw_name,
         "online":              _is_online(ds),
         "label_active":        l0,
         "label_inactive":      l1,
@@ -789,11 +818,14 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # Poller-facing API routes — authenticated by API key, not browser session
-        if self.path == "/pending_gateway_deletions":
+        if self.path.startswith("/pending_gateway_deletions"):
             self._serve_pending_gateway_deletions()
             return
-        if self.path == "/pending_gateway_additions":
+        if self.path.startswith("/pending_gateway_additions"):
             self._serve_pending_gateway_additions()
+            return
+        if self.path == "/gateways":
+            self._serve_gateways()
             return
 
         if not self._check_browser_auth():
@@ -865,6 +897,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_confirm_gateway_deletions()
         elif self.path == "/confirm_gateway_additions":
             self._handle_confirm_gateway_additions()
+        elif self.path.startswith("/ingest/lorawan_uplink"):
+            self._handle_ingest_lorawan_uplink()
         else:
             self.send_response(404)
             self.end_headers()
@@ -1197,8 +1231,6 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_ingest_event(self):
         if not self._check_api_key():
             return
-        global _last_poller_contact
-        _last_poller_contact = time.time()
         try:
             event = self._read_json()
         except (json.JSONDecodeError, ValueError) as exc:
@@ -1209,6 +1241,11 @@ class Handler(BaseHTTPRequestHandler):
         if not eui:
             self._json_response(400, {"error": "devEUI required"})
             return
+
+        # Update per-gateway last-contact time if present
+        gw_id = _device_gateway.get(eui, "")
+        if gw_id:
+            _update_poller_contact(gw_id)
 
         if eui not in _device_states:
             _device_states[eui] = _new_device_state()
@@ -1238,31 +1275,39 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_ingest_devices(self):
         if not self._check_api_key():
             return
-        global _last_poller_contact
-        _last_poller_contact = time.time()
         try:
             body = self._read_json()
         except (json.JSONDecodeError, ValueError) as exc:
             self._json_response(400, {"error": str(exc)})
             return
 
+        gateway_id   = body.get("gateway_id", "dfrobot")
+        gateway_name = body.get("gateway_name", gateway_id)
         devices      = body.get("devices", [])
         device_types = body.get("device_types", {})
 
+        _update_poller_contact(gateway_id, gateway_name)
+
+        # Merge: keep devices from other gateways, replace from this one
         with _device_registry_lock:
+            other = [d for d in _device_registry
+                     if d.get("gateway_id", "dfrobot") != gateway_id]
             _device_registry.clear()
-            _device_registry.extend(devices)
+            _device_registry.extend(other + devices)
 
         for eui, dtype in device_types.items():
             _device_type_store[eui.upper()] = dtype
 
         for dev in devices:
             eui = dev["devEUI"].upper()
+            _device_gateway[eui] = gateway_id
             if eui not in _device_states:
                 _device_states[eui] = _new_device_state()
             _ensure_device_table(eui)
 
-        broadcast({"devices_update": devices})
+        with _device_registry_lock:
+            all_devs = list(_device_registry)
+        broadcast({"devices_update": all_devs})
         self._json_response(200, {"ok": True})
 
     def _handle_ingest_remove_device(self):
@@ -1304,19 +1349,28 @@ class Handler(BaseHTTPRequestHandler):
                                     if d.get("devEUI", "").upper() != eui]
             remaining = [_build_device_out(d) for d in _device_registry]
 
+        gw_id = _device_gateway.get(eui, "dfrobot")
         with _pending_gw_lock:
-            _pending_gw_deletions.add(eui)
+            if gw_id not in _pending_gw_deletions:
+                _pending_gw_deletions[gw_id] = set()
+            _pending_gw_deletions[gw_id].add(eui)
 
         broadcast({"devices_update": remaining})
         self._json_response(200, {"success": True})
 
-    # ── Gateway deletion coordination (poller ↔ dashboard) ───────────────────
+    # ── Gateway deletion/addition coordination (poller ↔ dashboard) ──────────
+
+    def _gw_id_from_qs(self) -> str:
+        import urllib.parse
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        return (qs.get("gateway_id") or ["dfrobot"])[0]
 
     def _serve_pending_gateway_deletions(self):
         if not self._check_api_key():
             return
+        gw_id = self._gw_id_from_qs()
         with _pending_gw_lock:
-            euids = list(_pending_gw_deletions)
+            euids = list(_pending_gw_deletions.get(gw_id, set()))
         self._json_response(200, {"euids": euids})
 
     def _handle_confirm_gateway_deletions(self):
@@ -1327,16 +1381,20 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, ValueError) as exc:
             self._json_response(400, {"error": str(exc)})
             return
-        confirmed = [e.upper() for e in body.get("euids", [])]
+        gw_id     = body.get("gateway_id", "dfrobot")
+        confirmed = {e.upper() for e in body.get("euids", [])}
         with _pending_gw_lock:
-            _pending_gw_deletions.difference_update(confirmed)
+            s = _pending_gw_deletions.get(gw_id, set())
+            s.difference_update(confirmed)
+            _pending_gw_deletions[gw_id] = s
         self._json_response(200, {"ok": True})
 
     def _serve_pending_gateway_additions(self):
         if not self._check_api_key():
             return
+        gw_id = self._gw_id_from_qs()
         with _pending_gw_lock:
-            items = list(_pending_gw_additions)
+            items = list(_pending_gw_additions.get(gw_id, []))
         self._json_response(200, {"additions": items})
 
     def _handle_confirm_gateway_additions(self):
@@ -1347,10 +1405,12 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, ValueError) as exc:
             self._json_response(400, {"error": str(exc)})
             return
+        gw_id     = body.get("gateway_id", "dfrobot")
         confirmed = {e.upper() for e in body.get("euids", [])}
         with _pending_gw_lock:
-            _pending_gw_additions[:] = [
-                a for a in _pending_gw_additions
+            lst = _pending_gw_additions.get(gw_id, [])
+            _pending_gw_additions[gw_id] = [
+                a for a in lst
                 if a.get("devEUI", "").upper() not in confirmed
             ]
         self._json_response(200, {"ok": True})
@@ -1362,8 +1422,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response(400, {"success": False, "error": str(exc)})
             return
 
-        eui  = body.get("devEUI", "").upper()
-        mode = body.get("mode", "OTAA")
+        eui    = body.get("devEUI", "").upper()
+        mode   = body.get("mode", "OTAA")
+        gw_id  = body.get("gateway_id", "dfrobot")
         if len(eui) != 16:
             self._json_response(400, {"success": False, "error": "devEUI must be 16 hex characters"})
             return
@@ -1371,20 +1432,137 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response(400, {"success": False, "error": "mode must be OTAA or ABP"})
             return
 
-        addition = {**body, "devEUI": eui}
+        addition = {**body, "devEUI": eui, "gateway_id": gw_id}
         with _pending_gw_lock:
-            _pending_gw_additions.append(addition)
+            if gw_id not in _pending_gw_additions:
+                _pending_gw_additions[gw_id] = []
+            _pending_gw_additions[gw_id].append(addition)
 
         self._json_response(200, {"success": True})
+
+    def _serve_gateways(self):
+        """Return list of known gateways with their online status."""
+        now = time.time()
+        with _gateways_lock:
+            gateways = []
+            for gw_id, meta in _known_gateways.items():
+                last = _poller_contacts.get(gw_id, 0)
+                online = last > 0 and (now - last) < _POLLER_TIMEOUT
+                gateways.append({
+                    "id":               gw_id,
+                    "name":             meta.get("name", gw_id),
+                    "online":           online,
+                    "last_contact_ago": round(now - last, 1) if last else None,
+                })
+        self._json_response(200, {"gateways": gateways})
+
+    # ── ChirpStack HTTP integration uplink (from UG65 or other gateways) ──────
+
+    def _handle_ingest_lorawan_uplink(self):
+        """Receive an uplink event posted by ChirpStack HTTP integration."""
+        if not self._check_api_key():
+            return
+        import base64 as _b64
+        import urllib.parse
+
+        qs        = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        gateway_id = (qs.get("gateway_id") or ["unknown"])[0]
+
+        try:
+            body = self._read_json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._json_response(400, {"error": str(exc)})
+            return
+
+        dev_eui  = (body.get("devEUI") or "").upper()
+        data_b64 = body.get("data", "")
+        if not dev_eui or not data_b64:
+            self._json_response(200, {"ok": True, "skipped": "no devEUI or data"})
+            return
+
+        try:
+            raw_hex = _b64.b64decode(data_b64).hex()
+        except Exception as exc:
+            self._json_response(400, {"error": f"invalid base64: {exc}"})
+            return
+
+        now   = time.time()
+        dtype = _get_device_type(dev_eui)
+
+        if dev_eui not in _device_states:
+            _device_states[dev_eui] = _new_device_state()
+        ds = _device_states[dev_eui]
+        ds["last_new_data_at"] = now
+        _device_gateway[dev_eui] = gateway_id
+
+        decoded = device_classifier.decode_payload(dtype, dev_eui, raw_hex)
+        event   = {"devEUI": dev_eui, "device_type": dtype, "timestamp": now}
+
+        if device_classifier.is_analog(dtype):
+            rv = decoded.get("raw_value")
+            event.update({"raw_value": rv, "unit": decoded.get("unit")})
+            if decoded.get("extra"):
+                event["extra"] = decoded["extra"]
+            ds["last_value"] = rv
+            if rv is not None:
+                with ds["stats_lock"]:
+                    st = ds["stats"]
+                    if st["server_start"] is None:
+                        st["server_start"] = now
+                    if st["min_value"] is None or rv < st["min_value"]:
+                        st["min_value"] = rv
+                    if st["max_value"] is None or rv > st["max_value"]:
+                        st["max_value"] = rv
+                    st["sum_value"]   = st.get("sum_value", 0.0) + rv
+                    st["count_value"] = st.get("count_value", 0) + 1
+                    event["stats"] = dict(st)
+        else:
+            val = decoded.get("value", 1)
+            event["value"] = val
+            if decoded.get("extra"):
+                event["extra"] = decoded["extra"]
+            ds["last_value"] = val
+            changed = (val != ds.get("last_value"))
+            if changed:
+                with ds["stats_lock"]:
+                    st = ds["stats"]
+                    if st["server_start"] is None:
+                        st["server_start"] = now
+                    if val == 0:
+                        st["opens"] += 1
+                    else:
+                        st["closes"] += 1
+                    st["last_change_ts"] = now
+                    event["stats"] = dict(st)
+
+        with ds["history_lock"]:
+            ds["history"].append(event)
+
+        _update_poller_contact(gateway_id)
+        _db_insert_event(event)
+        broadcast(event)
+        _persist_stats()
+        self._json_response(200, {"ok": True})
 
     # ── Poller status API ─────────────────────────────────────────────────────
 
     def _serve_poller_status(self):
-        now    = time.time()
-        online = (_last_poller_contact > 0 and
-                  (now - _last_poller_contact) < _POLLER_TIMEOUT)
-        ago    = round(now - _last_poller_contact, 1) if _last_poller_contact else None
-        self._json_response(200, {"online": online, "last_contact_ago": ago})
+        now      = time.time()
+        pollers  = {}
+        any_online = False
+        with _gateways_lock:
+            for gw_id, meta in _known_gateways.items():
+                last   = _poller_contacts.get(gw_id, 0)
+                online = last > 0 and (now - last) < _POLLER_TIMEOUT
+                if online:
+                    any_online = True
+                pollers[gw_id] = {
+                    "id":               gw_id,
+                    "name":             meta.get("name", gw_id),
+                    "online":           online,
+                    "last_contact_ago": round(now - last, 1) if last else None,
+                }
+        self._json_response(200, {"online": any_online, "pollers": pollers})
 
     # ── Log data API ──────────────────────────────────────────────────────────
 

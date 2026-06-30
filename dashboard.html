@@ -1035,6 +1035,12 @@
       </button>
     </div>
     <div class="field-group">
+      <div class="field">
+        <label>Gateway <span class="required">*</span></label>
+        <select id="ad-gateway">
+          <option value="" disabled selected>Loading gateways…</option>
+        </select>
+      </div>
       <div class="field-row">
         <div class="field">
           <label>Device Name</label>
@@ -1559,11 +1565,12 @@ function buildDevicesDropdown(devices) {
     const opt = document.createElement('div');
     opt.className = 'device-option' + (eui === selectedEUI ? ' selected' : '');
     opt.dataset.eui = eui;
+    const gwName = dev.gateway_name || dev.gateway_id || '';
     opt.innerHTML = `
       <div class="dev-status-dot ${online ? 'online' : 'offline'}"></div>
       <div class="dev-info">
         <div class="dev-name">${escHtml(dev.name)}</div>
-        <div class="dev-meta">${escHtml(eui)} · ${online ? 'Online' : 'Offline'}</div>
+        <div class="dev-meta">${escHtml(eui)} · ${online ? 'Online' : 'Offline'}${gwName ? ' · <span style="opacity:.7">' + escHtml(gwName) + '</span>' : ''}</div>
       </div>
       <div class="dev-battery">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z"/></svg>
@@ -1619,6 +1626,8 @@ function buildDeviceMeta(dev) {
     labelInactive: dev.label_inactive || 'INACTIVE',
     deviceType:    dev.device_type    || 'generic',
     isAnalog:      !!(dev.is_analog),
+    gatewayId:     dev.gateway_id     || 'dfrobot',
+    gatewayName:   dev.gateway_name   || dev.gateway_id || 'DFRobot',
   };
 }
 
@@ -1925,8 +1934,16 @@ async function _checkPollerStatus() {
   try {
     const res = await fetch('/poller_status');
     if (!res.ok) return;
-    const { online } = await res.json();
-    setConn(online ? 'connected' : 'stale');
+    const data = await res.json();
+    setConn(data.online ? 'connected' : 'stale');
+    // Update per-gateway status tooltip if there are multiple pollers
+    const pollers = data.pollers || {};
+    const ids = Object.keys(pollers);
+    if (ids.length > 1) {
+      const onlineCount = ids.filter(id => pollers[id].online).length;
+      const connEl = document.getElementById('connection-status');
+      if (connEl) connEl.title = `${onlineCount}/${ids.length} gateways online`;
+    }
   } catch(_) { /* SSE onerror will handle a real disconnect */ }
 }
 
@@ -3592,10 +3609,35 @@ function exportLog(eui) {
 // ── Add Device dialog ──────────────────────────────────────────────────────
 const adDialog = document.getElementById('add-device-dialog');
 
-function openAddDeviceDialog() {
-  document.getElementById('ad-msg').className       = 'dialog-msg';
-  document.getElementById('ad-submit-btn').disabled = false;
+async function openAddDeviceDialog() {
+  document.getElementById('ad-msg').className        = 'dialog-msg';
+  document.getElementById('ad-submit-btn').disabled  = false;
   document.getElementById('ad-submit-btn').innerHTML = ADD_DEVICE_BTN_HTML;
+  // Populate gateway list
+  const gwSel = document.getElementById('ad-gateway');
+  try {
+    const resp = await fetch('/gateways');
+    if (resp.ok) {
+      const { gateways } = await resp.json();
+      gwSel.innerHTML = '';
+      if (!gateways || !gateways.length) {
+        gwSel.innerHTML = '<option value="" disabled selected>No gateways connected</option>';
+      } else {
+        gateways.forEach(gw => {
+          const opt = document.createElement('option');
+          opt.value       = gw.id;
+          opt.textContent = gw.name + (gw.online ? '' : ' (offline)');
+          if (!gw.online) opt.disabled = true;
+          gwSel.appendChild(opt);
+        });
+        // Auto-select if only one online gateway
+        const onlineGws = gateways.filter(g => g.online);
+        if (onlineGws.length === 1) gwSel.value = onlineGws[0].id;
+      }
+    }
+  } catch(_) {
+    gwSel.innerHTML = '<option value="dfrobot">DFRobot (default)</option>';
+  }
   adDialog.showModal();
 }
 function closeAddDeviceDialog() { adDialog.close(); }
@@ -3609,15 +3651,17 @@ function onAdModeChange() {
 function hexVal(id) { return document.getElementById(id).value.replace(/[\s:]/g, '').toUpperCase(); }
 
 async function submitAddDevice() {
-  const mode    = document.getElementById('ad-mode').value;
-  const devEUI  = hexVal('ad-dev-eui');
-  const appKey  = hexVal('ad-app-key');
-  const joinEUI = hexVal('ad-join-eui');
-  const devAddr = hexVal('ad-dev-addr');
-  const appSKey = hexVal('ad-app-skey');
-  const nwkSKey = hexVal('ad-nwk-skey');
+  const mode      = document.getElementById('ad-mode').value;
+  const gatewayId = document.getElementById('ad-gateway').value;
+  const devEUI    = hexVal('ad-dev-eui');
+  const appKey    = hexVal('ad-app-key');
+  const joinEUI   = hexVal('ad-join-eui');
+  const devAddr   = hexVal('ad-dev-addr');
+  const appSKey   = hexVal('ad-app-skey');
+  const nwkSKey   = hexVal('ad-nwk-skey');
 
   const errors = [];
+  if (!gatewayId) errors.push('Please select a gateway');
   if (devEUI.length !== 16) errors.push('Device EUI must be 16 hex characters');
   if (mode === 'OTAA') {
     if (appKey.length !== 32) errors.push('App Key must be 32 hex characters');
@@ -3637,7 +3681,7 @@ async function submitAddDevice() {
   btn.innerHTML = '<div class="spinner"></div> Adding…';
 
   const name    = document.getElementById('ad-name').value.trim() || devEUI;
-  const payload = { mode, name, devEUI,
+  const payload = { mode, name, devEUI, gateway_id: gatewayId,
     lorawanSpec: document.getElementById('ad-lorawan-spec').value,
     deviceClass: document.getElementById('ad-device-class').value,
   };
@@ -3648,7 +3692,7 @@ async function submitAddDevice() {
     const resp = await fetch('/add_device', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const json = await resp.json();
     if (json.success) {
-      msgEl.textContent = `Device "${name}" added successfully.`;
+      msgEl.textContent = `Device "${name}" queued for "${gatewayId}". Restart the device and wait up to 2 minutes.`;
       msgEl.className   = 'dialog-msg success';
       btn.disabled = false;
       btn.innerHTML = ADD_DEVICE_BTN_HTML;

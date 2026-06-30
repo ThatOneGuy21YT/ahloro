@@ -2,20 +2,29 @@
 """
 DoorSense poller — runs locally, next to the LoRaWAN gateway.
 
-Polls the DFRobot gateway and SIOT broker, decodes sensor payloads, and
-forwards every event and device-list change to the remote dashboard server
-via HTTP POST.  No database access; no HTTP server.
+One poller instance per gateway.  Multiple pollers can share one dashboard.
+
+Polls the gateway ChirpStack API for device management, decodes sensor payloads
+(DFRobot type: via SIOT broker), and forwards events and device-list changes to
+the remote dashboard server via HTTP POST.
 
 Configuration (env vars, or a .env file in the same directory):
-  GW_HOST        IP of the LoRaWAN gateway          (default: 10.8.8.8)
-  GW_EMAIL       Gateway admin email                (default: admin)
-  GW_PASS        Gateway admin password
-  SIOT_USER      SIOT broker username               (default: siot)
-  SIOT_PASS      SIOT broker password
-  DASHBOARD_URL  Full base URL of the dashboard     (required)
-  API_KEY        Shared secret for ingest endpoints (required if set on dashboard)
+  GATEWAY_ID      Short unique name for this gateway (default: dfrobot)
+  GW_DISPLAY_NAME Human-readable label shown in the UI (default: GATEWAY_ID)
+  GW_TYPE         dfrobot | ug65  (default: dfrobot)
+  GW_HOST         IP of the LoRaWAN gateway (default: 10.8.8.8)
+  GW_EMAIL        ChirpStack admin email/username (default: admin)
+  GW_PASS         ChirpStack admin password (plain text)
+  GW_PASS_HASH    MD5-base64 of ChirpStack password — overrides GW_PASS for
+                  ug65 type (where the API requires pre-hashed passwords)
+  SIOT_USER       SIOT broker username (dfrobot only, default: siot)
+  SIOT_PASS       SIOT broker password (dfrobot only)
+  DASHBOARD_URL   Full base URL of the dashboard (required)
+  API_KEY         Shared secret for ingest endpoints
 """
 
+import base64
+import hashlib
 import json
 import os
 import re
@@ -49,10 +58,17 @@ _load_dotenv()
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-GW_HOST  = os.environ.get("GW_HOST",  "10.8.8.8")
-GW_BASE  = f"https://{GW_HOST}/api"
-GW_EMAIL = os.environ.get("GW_EMAIL", "admin")
-GW_PASS  = os.environ.get("GW_PASS",  "")
+GATEWAY_ID       = os.environ.get("GATEWAY_ID",       "dfrobot")
+GW_DISPLAY_NAME  = os.environ.get("GW_DISPLAY_NAME",  GATEWAY_ID)
+GW_TYPE          = os.environ.get("GW_TYPE",          "dfrobot")
+GW_HOST          = os.environ.get("GW_HOST",          "10.8.8.8")
+GW_EMAIL         = os.environ.get("GW_EMAIL",         "admin")
+GW_PASS          = os.environ.get("GW_PASS",          "")
+GW_PASS_HASH     = os.environ.get("GW_PASS_HASH",     "")   # MD5-base64, overrides GW_PASS for ug65
+
+# Scheme: ug65 uses plain HTTP; dfrobot uses HTTPS
+_GW_SCHEME = "http" if GW_TYPE == "ug65" else "https"
+GW_BASE    = f"{_GW_SCHEME}://{GW_HOST}/api"
 
 SIOT_BASE = f"http://{GW_HOST}:8080/api/v2"
 SIOT_USER = os.environ.get("SIOT_USER", "siot")
@@ -77,6 +93,10 @@ _gw_ssl.verify_mode    = ssl.CERT_NONE
 # ── Gateway helpers ───────────────────────────────────────────────────────────
 
 
+def _md5_b64(s: str) -> str:
+    return base64.b64encode(hashlib.md5(s.encode()).digest()).decode()
+
+
 def _gw_request(method, path, body=None, token=None):
     url     = f"{GW_BASE}/{path}"
     headers = {"Content-Type": "application/json"}
@@ -84,7 +104,9 @@ def _gw_request(method, path, body=None, token=None):
         headers["Authorization"] = f"Bearer {token}"
     data = json.dumps(body).encode() if body is not None else None
     req  = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, context=_gw_ssl, timeout=15) as resp:
+    # Only pass SSL context for HTTPS connections
+    ctx = _gw_ssl if url.startswith("https://") else None
+    with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
         raw = resp.read()
         return json.loads(raw) if raw else {}
 
@@ -104,7 +126,6 @@ def _siot_request(method, path, body=None, token=None):
 
 
 def _post_to_dashboard(path: str, payload: dict):
-    """POST a JSON payload to the remote dashboard. Silently logs errors."""
     url     = f"{DASHBOARD_URL}{path}"
     data    = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json"}
@@ -116,6 +137,18 @@ def _post_to_dashboard(path: str, payload: dict):
             return resp.status
     except Exception as exc:
         print(f"POST {path} error: {exc}", file=sys.stderr)
+
+
+def _get_from_dashboard(path: str) -> dict:
+    url     = f"{DASHBOARD_URL}{path}"
+    headers = {"X-Api-Key": API_KEY} if API_KEY else {}
+    req     = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read())
+    except Exception as exc:
+        print(f"GET {path} error: {exc}", file=sys.stderr)
+        return {}
 
 
 # ── Device type store ─────────────────────────────────────────────────────────
@@ -145,6 +178,7 @@ def _new_device_state() -> dict:
     return {
         "last_value":          None,
         "last_siot_ts":        None,
+        "last_event_id":       None,   # for ug65 event dedup
         "last_new_data_at":    None,
         "button_expire_timer": None,
         "stats": {
@@ -177,6 +211,7 @@ def _build_device_out(dev: dict) -> dict:
     l0, l1 = device_classifier.get_labels(dtype)
     return {
         **dev,
+        "gateway_id":          GATEWAY_ID,
         "online":              _is_online(ds),
         "label_active":        l0,
         "label_inactive":      l1,
@@ -187,45 +222,207 @@ def _build_device_out(dev: dict) -> dict:
 
 
 def _post_devices_update():
-    """Send the current device list and type map to the dashboard."""
     with _device_registry_lock:
         registry_snap = list(_device_registry)
     _post_to_dashboard("/ingest/devices", {
-        "devices":      [_build_device_out(d) for d in registry_snap],
-        "device_types": dict(_device_type_store),
+        "gateway_id":    GATEWAY_ID,
+        "gateway_name":  GW_DISPLAY_NAME,
+        "devices":       [_build_device_out(d) for d in registry_snap],
+        "device_types":  dict(_device_type_store),
     })
+
+
+# ── Gateway login ─────────────────────────────────────────────────────────────
+
+
+def _gw_login() -> str:
+    if GW_TYPE == "ug65":
+        # UG65 ChirpStack API expects username + MD5-base64 password
+        pw_hash = GW_PASS_HASH if GW_PASS_HASH else _md5_b64(GW_PASS)
+        auth = _gw_request("POST", "internal/login",
+                            {"username": GW_EMAIL, "password": pw_hash})
+    else:
+        auth = _gw_request("POST", "internal/login",
+                            {"email": GW_EMAIL, "password": GW_PASS})
+    return auth["jwt"]
+
+
+# ── UG65 infrastructure setup ─────────────────────────────────────────────────
+
+_ug65_app_id:   str | None = None
+_ug65_app_lock  = threading.Lock()
+
+
+def _ug65_get_list(resp: dict) -> list:
+    """UG65 ChirpStack uses 'result' for most collections but 'apps' for applications."""
+    return resp.get("result") or resp.get("apps") or []
+
+
+def _ug65_ensure_infrastructure(token: str) -> str:
+    """Ensure service profile, device profile, and application exist on UG65.
+    Returns the application ID to use for device registration."""
+    global _ug65_app_id
+    with _ug65_app_lock:
+        if _ug65_app_id:
+            return _ug65_app_id
+
+        # Check if app already exists
+        resp = _gw_request("GET", "applications?limit=10&organizationID=1", token=token)
+        apps = _ug65_get_list(resp)
+        if apps:
+            _ug65_app_id = str(apps[0]["id"])
+            print(f"UG65: using existing application ID={_ug65_app_id}")
+            return _ug65_app_id
+
+        # Create service profile
+        sp_id = ""
+        try:
+            sp_list = _gw_request(
+                "GET", "service-profiles?organizationID=1&networkServerID=1&limit=10",
+                token=token,
+            )
+            sps = _ug65_get_list(sp_list)
+            if sps:
+                sp_id = str(sps[0]["id"])
+            else:
+                sp_resp = _gw_request("POST", "service-profiles", token=token, body={
+                    "serviceProfile": {
+                        "name":            "DoorSense-Default",
+                        "organizationID":  "1",
+                        "networkServerID": "1",
+                    }
+                })
+                sp_id = str(sp_resp.get("id", ""))
+                print(f"UG65: created service profile ID={sp_id}")
+        except Exception as exc:
+            print(f"UG65: service profile error: {exc}", file=sys.stderr)
+
+        # Create application
+        app_resp = _gw_request("POST", "applications", token=token, body={
+            "application": {
+                "name":             "DoorSense",
+                "description":      "DoorSense multi-gateway",
+                "organizationID":   "1",
+                "serviceProfileID": sp_id,
+            }
+        })
+        app_id = str(app_resp.get("id", "1"))
+        print(f"UG65: created application ID={app_id}")
+
+        # Set up HTTP integration so ChirpStack posts uplinks directly to the dashboard
+        uplink_url = f"{DASHBOARD_URL}/ingest/lorawan_uplink?gateway_id={GATEWAY_ID}"
+        try:
+            _gw_request("POST", f"applications/{app_id}/integrations/http", token=token,
+                        body={
+                            "integration": {
+                                "dataUpURL":             uplink_url,
+                                "joinNotificationURL":   "",
+                                "ackNotificationURL":    "",
+                                "errNotificationURL":    "",
+                                "statusNotificationURL": "",
+                                "locationNotificationURL": "",
+                                "headers": [
+                                    {"key": "X-Api-Key", "value": API_KEY},
+                                ] if API_KEY else [],
+                            }
+                        })
+            print(f"UG65: HTTP integration → {uplink_url}")
+        except Exception as exc:
+            print(f"UG65: HTTP integration setup failed: {exc}", file=sys.stderr)
+
+        _ug65_app_id = app_id
+        return app_id
+
+
+def _ug65_ensure_device_profile(token: str, lorawan_spec: str,
+                                 mode: str, device_class: str) -> str:
+    """Get or create a device profile matching the requested parameters."""
+    wants_join    = (mode == "OTAA")
+    wants_class_c = (device_class == "C")
+
+    resp     = _gw_request(
+        "GET", "device-profiles?organizationID=1&networkServerID=1&limit=50",
+        token=token,
+    )
+    profiles = _ug65_get_list(resp)
+
+    # Score existing profiles (same logic as DFRobot path)
+    def _score(p):
+        s = 0
+        if p.get("supportsJoin") == wants_join:
+            s += 1000
+        mac = p.get("macVersion", "")
+        if mac and lorawan_spec:
+            if mac == lorawan_spec:
+                s += 100
+            else:
+                mp, sp2 = mac.split("."), lorawan_spec.split(".")
+                if len(mp) >= 2 and len(sp2) >= 2 and mp[:2] == sp2[:2]:
+                    s += 40
+                elif mp[:1] == sp2[:1]:
+                    s += 10
+        if wants_class_c and p.get("supportsClassC"):
+            s += 20
+        elif not wants_class_c and not p.get("supportsClassC"):
+            s += 20
+        return s
+
+    if profiles:
+        best = max(profiles, key=_score)
+        if _score(best) >= 1000:   # at least join-type match
+            return str(best["id"])
+
+    # Create a new profile
+    mac_ver = lorawan_spec   # ChirpStack v3 uses "1.0.3" format
+    try:
+        prof_resp = _gw_request("POST", "device-profiles", token=token, body={
+            "deviceProfile": {
+                "name":              f"DoorSense-{mode}-{lorawan_spec}",
+                "organizationID":    "1",
+                "networkServerID":   "1",
+                "macVersion":        mac_ver,
+                "regParamsRevision": "A",
+                "supportsJoin":      wants_join,
+                "supportsClassB":    False,
+                "supportsClassC":    wants_class_c,
+                "rxDelay1":         1,
+                "rxDROffset1":      0,
+                "rxDataRate2":      8,
+                "rxFreq2":          923300000,
+            }
+        })
+        pid = str(prof_resp.get("id", ""))
+        print(f"UG65: created device profile ID={pid} ({mode}, {lorawan_spec})")
+        return pid
+    except Exception as exc:
+        print(f"UG65: device profile creation failed: {exc}", file=sys.stderr)
+        return profiles[0]["id"] if profiles else ""
 
 
 # ── Device initialisation ─────────────────────────────────────────────────────
 
 
-def _gw_login() -> str:
-    auth = _gw_request("POST", "internal/login", {"email": GW_EMAIL, "password": GW_PASS})
-    return auth["jwt"]
-
-
 def _fetch_gateway_devices() -> list:
     token = _gw_login()
-    resp  = _gw_request("GET", "devices?limit=100&applicationID=1", token=token)
-    return resp.get("result", [])
+    if GW_TYPE == "ug65":
+        app_id = _ug65_ensure_infrastructure(token)
+        resp   = _gw_request(
+            "GET", f"devices?limit=100&applicationID={app_id}", token=token,
+        )
+        return _ug65_get_list(resp)
+    else:
+        resp = _gw_request("GET", "devices?limit=100&applicationID=1", token=token)
+        return resp.get("result", [])
 
 
 def _get_pending_gateway_deletions() -> list[str]:
-    url     = f"{DASHBOARD_URL}/pending_gateway_deletions"
-    headers = {}
-    if API_KEY:
-        headers["X-Api-Key"] = API_KEY
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read()).get("euids", [])
-    except Exception as exc:
-        print(f"GET pending_gateway_deletions error: {exc}", file=sys.stderr)
-        return []
+    data = _get_from_dashboard(
+        f"/pending_gateway_deletions?gateway_id={GATEWAY_ID}"
+    )
+    return data.get("euids", [])
 
 
 def _process_gateway_deletions():
-    """Delete any dashboard-requested devices from the gateway, then confirm."""
     pending = _get_pending_gateway_deletions()
     if not pending:
         return
@@ -242,135 +439,201 @@ def _process_gateway_deletions():
             except Exception as exc:
                 print(f"Gateway: delete {eui} failed: {exc}", file=sys.stderr)
         if deleted:
-            _post_to_dashboard("/confirm_gateway_deletions", {"euids": deleted})
+            _post_to_dashboard("/confirm_gateway_deletions",
+                               {"gateway_id": GATEWAY_ID, "euids": deleted})
     except Exception as exc:
         print(f"Gateway deletion login error: {exc}", file=sys.stderr)
 
 
 def _get_pending_gateway_additions() -> list:
-    url     = f"{DASHBOARD_URL}/pending_gateway_additions"
-    headers = {"X-Api-Key": API_KEY} if API_KEY else {}
-    req     = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read()).get("additions", [])
-    except Exception as exc:
-        print(f"GET pending_gateway_additions error: {exc}", file=sys.stderr)
-        return []
+    data = _get_from_dashboard(
+        f"/pending_gateway_additions?gateway_id={GATEWAY_ID}"
+    )
+    return data.get("additions", [])
 
 
 def _process_gateway_additions():
-    """Create any dashboard-requested devices on the gateway, then confirm."""
     pending = _get_pending_gateway_additions()
     if not pending:
         return
     try:
         token = _gw_login()
 
-        # Fetch full profile details (list endpoint omits macVersion etc.)
-        prof_list = _gw_request("GET", "device-profiles?applicationID=1&limit=100", token=token)
-        profiles  = []
-        for item in prof_list.get("result", []):
-            try:
-                detail = _gw_request("GET", f"device-profiles/{item['id']}", token=token)
-                profiles.append(detail.get("deviceProfile", item))
-            except Exception as exc:
-                print(f"Gateway: profile detail {item['id']} failed: {exc}", file=sys.stderr)
-                profiles.append(item)
-
-        processed = []
-        for addition in pending:
-            eui          = addition.get("devEUI", "").upper()
-            mode         = addition.get("mode", "OTAA")
-            name         = addition.get("name", eui)
-            lorawan_spec = addition.get("lorawanSpec", "")
-            device_class = addition.get("deviceClass", "A")
-            try:
-                wants_join    = (mode == "OTAA")
-                wants_class_c = (device_class == "C")
-
-                def _profile_score(p):
-                    score = 0
-                    if p.get("supportsJoin") == wants_join:
-                        score += 1000
-                    mac = p.get("macVersion", "")
-                    if mac and lorawan_spec:
-                        if mac == lorawan_spec:
-                            score += 100
-                        else:
-                            mp = mac.split(".")
-                            sp = lorawan_spec.split(".")
-                            if len(mp) >= 2 and len(sp) >= 2 and mp[:2] == sp[:2]:
-                                score += 40  # same major.minor
-                            elif mp[:1] == sp[:1]:
-                                score += 10  # same major
-                    if wants_class_c and p.get("supportsClassC"):
-                        score += 20
-                    elif not wants_class_c and not p.get("supportsClassC"):
-                        score += 20
-                    return score
-
-                best = max(profiles, key=_profile_score) if profiles else None
-                profile_id = best["id"] if best else None
-                if not profile_id:
-                    print(f"Gateway add {eui}: no device profiles configured", file=sys.stderr)
-                    processed.append(eui)
-                    continue
-                print(f"Gateway add {eui}: profile '{best.get('name')}' mac={best.get('macVersion')} join={best.get('supportsJoin')}")
-
-                _gw_request("POST", "devices", token=token, body={
-                    "device": {
-                        "applicationID":  "1",
-                        "devEUI":          eui,
-                        "name":            name,
-                        "deviceProfileID": profile_id,
-                        "description":     "",
-                        "skipFCntCheck":   False,
-                    }
-                })
-
-                if mode == "OTAA":
-                    app_key  = addition.get("appKey", "")
-                    join_eui = addition.get("joinEUI") or "0000000000000000"
-                    print(f"Gateway add {eui}: OTAA joinEUI={join_eui} appKey={app_key[:8]}...")
-                    # ChirpStack v3 proto dropped appEUI from DeviceKeys in later versions.
-                    # Send both camelCase variants so whichever proto version the gateway
-                    # uses will accept it; unknown fields are silently dropped by grpc-gateway.
-                    _gw_request("POST", f"devices/{eui}/keys", token=token, body={
-                        "deviceKeys": {
-                            "devEUI": eui,
-                            "appEUI": join_eui,  # older ChirpStack v3
-                            "appEui": join_eui,  # proto JSON camelCase of app_eui
-                            "joinEUI": join_eui,  # v4-style / DFRobot custom
-                            "nwkKey": app_key,
-                            "appKey": app_key,
-                        }
-                    })
-                else:
-                    nwk = addition.get("nwkSKey", "")
-                    _gw_request("POST", f"devices/{eui}/activation", token=token, body={
-                        "deviceActivation": {
-                            "devEUI":        eui,
-                            "devAddr":       addition.get("devAddr", ""),
-                            "appSKey":       addition.get("appSKey", ""),
-                            "nwkSKey":       nwk,
-                            "fNwkSIntKey":   nwk,
-                            "sNwkSIntKey":   nwk,
-                            "nwkSessionKey": nwk,
-                        }
-                    })
-
-                print(f"Gateway: added device '{name}' ({eui}) [{mode}]")
-            except Exception as exc:
-                print(f"Gateway: add {eui} failed: {exc}", file=sys.stderr)
-            finally:
-                processed.append(eui)   # confirm regardless so queue doesn't grow
-
-        if processed:
-            _post_to_dashboard("/confirm_gateway_additions", {"euids": processed})
+        if GW_TYPE == "ug65":
+            _process_ug65_additions(token, pending)
+        else:
+            _process_dfrobot_additions(token, pending)
 
     except Exception as exc:
         print(f"Gateway additions error: {exc}", file=sys.stderr)
+
+
+def _process_dfrobot_additions(token: str, pending: list):
+    # Fetch full profile details (list endpoint omits macVersion)
+    prof_list = _gw_request("GET", "device-profiles?applicationID=1&limit=100", token=token)
+    profiles  = []
+    for item in prof_list.get("result", []):
+        try:
+            detail = _gw_request("GET", f"device-profiles/{item['id']}", token=token)
+            profiles.append(detail.get("deviceProfile", item))
+        except Exception as exc:
+            print(f"Gateway: profile detail {item['id']} failed: {exc}", file=sys.stderr)
+            profiles.append(item)
+
+    processed = []
+    for addition in pending:
+        eui          = addition.get("devEUI", "").upper()
+        mode         = addition.get("mode", "OTAA")
+        name         = addition.get("name", eui)
+        lorawan_spec = addition.get("lorawanSpec", "")
+        device_class = addition.get("deviceClass", "A")
+        try:
+            wants_join    = (mode == "OTAA")
+            wants_class_c = (device_class == "C")
+
+            def _profile_score(p):
+                score = 0
+                if p.get("supportsJoin") == wants_join:
+                    score += 1000
+                mac = p.get("macVersion", "")
+                if mac and lorawan_spec:
+                    if mac == lorawan_spec:
+                        score += 100
+                    else:
+                        mp = mac.split(".")
+                        sp = lorawan_spec.split(".")
+                        if len(mp) >= 2 and len(sp) >= 2 and mp[:2] == sp[:2]:
+                            score += 40
+                        elif mp[:1] == sp[:1]:
+                            score += 10
+                if wants_class_c and p.get("supportsClassC"):
+                    score += 20
+                elif not wants_class_c and not p.get("supportsClassC"):
+                    score += 20
+                return score
+
+            best = max(profiles, key=_profile_score) if profiles else None
+            profile_id = best["id"] if best else None
+            if not profile_id:
+                print(f"Gateway add {eui}: no device profiles configured", file=sys.stderr)
+                processed.append(eui)
+                continue
+            print(f"Gateway add {eui}: profile '{best.get('name')}' mac={best.get('macVersion')} join={best.get('supportsJoin')}")
+
+            _gw_request("POST", "devices", token=token, body={
+                "device": {
+                    "applicationID":  "1",
+                    "devEUI":          eui,
+                    "name":            name,
+                    "deviceProfileID": profile_id,
+                    "description":     "",
+                    "skipFCntCheck":   False,
+                }
+            })
+
+            if mode == "OTAA":
+                app_key  = addition.get("appKey", "")
+                join_eui = addition.get("joinEUI") or "0000000000000000"
+                print(f"Gateway add {eui}: OTAA joinEUI={join_eui} appKey={app_key[:8]}...")
+                _gw_request("POST", f"devices/{eui}/keys", token=token, body={
+                    "deviceKeys": {
+                        "devEUI":  eui,
+                        "appEUI":  join_eui,
+                        "appEui":  join_eui,
+                        "joinEUI": join_eui,
+                        "nwkKey":  app_key,
+                        "appKey":  app_key,
+                    }
+                })
+            else:
+                nwk = addition.get("nwkSKey", "")
+                _gw_request("POST", f"devices/{eui}/activation", token=token, body={
+                    "deviceActivation": {
+                        "devEUI":        eui,
+                        "devAddr":       addition.get("devAddr", ""),
+                        "appSKey":       addition.get("appSKey", ""),
+                        "nwkSKey":       nwk,
+                        "fNwkSIntKey":   nwk,
+                        "sNwkSIntKey":   nwk,
+                        "nwkSessionKey": nwk,
+                    }
+                })
+
+            print(f"Gateway: added device '{name}' ({eui}) [{mode}]")
+        except Exception as exc:
+            print(f"Gateway: add {eui} failed: {exc}", file=sys.stderr)
+        finally:
+            processed.append(eui)
+
+    if processed:
+        _post_to_dashboard("/confirm_gateway_additions",
+                           {"gateway_id": GATEWAY_ID, "euids": processed})
+
+
+def _process_ug65_additions(token: str, pending: list):
+    app_id    = _ug65_ensure_infrastructure(token)
+    processed = []
+
+    for addition in pending:
+        eui          = addition.get("devEUI", "").upper()
+        mode         = addition.get("mode", "OTAA")
+        name         = addition.get("name", eui)
+        lorawan_spec = addition.get("lorawanSpec", "1.0.3")
+        device_class = addition.get("deviceClass", "A")
+        try:
+            profile_id = _ug65_ensure_device_profile(
+                token, lorawan_spec, mode, device_class,
+            )
+            if not profile_id:
+                print(f"UG65 add {eui}: could not get/create device profile", file=sys.stderr)
+                processed.append(eui)
+                continue
+
+            _gw_request("POST", "devices", token=token, body={
+                "device": {
+                    "applicationID":  app_id,
+                    "devEUI":          eui,
+                    "name":            name,
+                    "deviceProfileID": profile_id,
+                    "description":     "",
+                    "skipFCntCheck":   False,
+                }
+            })
+
+            if mode == "OTAA":
+                app_key  = addition.get("appKey", "")
+                join_eui = addition.get("joinEUI") or "0000000000000000"
+                print(f"UG65 add {eui}: OTAA joinEUI={join_eui} appKey={app_key[:8]}...")
+                _gw_request("POST", f"devices/{eui}/keys", token=token, body={
+                    "deviceKeys": {
+                        "devEUI":  eui,
+                        "appEUI":  join_eui,
+                        "appEui":  join_eui,
+                        "joinEUI": join_eui,
+                        "nwkKey":  app_key,
+                        "appKey":  app_key,
+                    }
+                })
+            else:
+                nwk = addition.get("nwkSKey", "")
+                _gw_request("POST", f"devices/{eui}/activation", token=token, body={
+                    "deviceActivation": {
+                        "devEUI":  eui,
+                        "devAddr": addition.get("devAddr", ""),
+                        "appSKey": addition.get("appSKey", ""),
+                        "nwkSKey": nwk,
+                    }
+                })
+
+            print(f"UG65: added device '{name}' ({eui}) [{mode}]")
+        except Exception as exc:
+            print(f"UG65: add {eui} failed: {exc}", file=sys.stderr)
+        finally:
+            processed.append(eui)
+
+    if processed:
+        _post_to_dashboard("/confirm_gateway_additions",
+                           {"gateway_id": GATEWAY_ID, "euids": processed})
 
 
 def init_devices():
@@ -400,7 +663,6 @@ def init_devices():
 
 
 def device_status_refresh():
-    """Periodically refresh device list; notify dashboard of adds/removes."""
     while True:
         time.sleep(DEVICE_STATUS_REFRESH)
         try:
@@ -433,10 +695,11 @@ def device_status_refresh():
                 _device_registry.extend(by_eui.values())
 
             for eui in added:
-                threading.Thread(
-                    target=device_poller_thread, args=(eui,),
-                    daemon=True, name=f"poll-{eui}"
-                ).start()
+                if GW_TYPE != "ug65":
+                    threading.Thread(
+                        target=device_poller_thread, args=(eui,),
+                        daemon=True, name=f"poll-{eui}"
+                    ).start()
                 print(f"Device added: {eui}")
 
             for eui in removed:
@@ -453,7 +716,6 @@ def device_status_refresh():
 
 
 def _button_expire_cb(dev_eui: str):
-    """Fire a synthetic RELEASED event if no real gateway update beats the timer."""
     ds = _device_states.get(dev_eui)
     if ds is None:
         return
@@ -474,7 +736,7 @@ def _button_expire_cb(dev_eui: str):
     })
 
 
-# ── Per-device poller thread ──────────────────────────────────────────────────
+# ── Per-device poller thread (DFRobot / SIOT only) ───────────────────────────
 
 
 def device_poller_thread(dev_eui: str):
@@ -527,83 +789,7 @@ def device_poller_thread(dev_eui: str):
                     print(f"Reclassified {dev_eui} → {new_dtype}")
 
             decoded = device_classifier.decode_payload(dtype, dev_eui, raw_hex)
-
-            # ── Analog path ───────────────────────────────────────────────────
-            if device_classifier.is_analog(dtype):
-                rv    = decoded.get("raw_value")
-                event = {
-                    "devEUI":      dev_eui,
-                    "device_type": dtype,
-                    "timestamp":   now,
-                    "raw_value":   rv,
-                    "unit":        decoded.get("unit"),
-                }
-                if decoded.get("extra"):
-                    event["extra"] = decoded["extra"]
-
-                if rv is not None:
-                    with ds["stats_lock"]:
-                        st = ds["stats"]
-                        if st["server_start"] is None:
-                            st["server_start"] = now
-                        if st["min_value"] is None or rv < st["min_value"]:
-                            st["min_value"] = rv
-                        if st["max_value"] is None or rv > st["max_value"]:
-                            st["max_value"] = rv
-                        st["sum_value"]   = st.get("sum_value", 0.0) + rv
-                        st["count_value"] = st.get("count_value", 0) + 1
-                        event["stats"] = dict(st)
-
-                _post_to_dashboard("/ingest/event", event)
-
-            # ── Binary path ───────────────────────────────────────────────────
-            else:
-                val   = decoded["value"]
-                event = {
-                    "devEUI":      dev_eui,
-                    "device_type": dtype,
-                    "value":       val,
-                    "timestamp":   now,
-                }
-                if decoded.get("extra"):
-                    event["extra"] = decoded["extra"]
-
-                is_button = (dtype == device_classifier.BUTTON)
-                changed   = (val != ds["last_value"])
-
-                if is_button:
-                    old_timer = ds["button_expire_timer"]
-                    if old_timer is not None:
-                        old_timer.cancel()
-                        ds["button_expire_timer"] = None
-
-                if changed:
-                    ds["last_value"] = val
-
-                if changed or is_button:
-                    with ds["stats_lock"]:
-                        if ds["stats"]["server_start"] is None:
-                            ds["stats"]["server_start"] = now
-                        if val == 0:
-                            ds["stats"]["opens"] += 1
-                            ev_extra = event.get("extra", {})
-                            if ev_extra.get("held"):
-                                ds["stats"]["holds"] += 1
-                            elif ev_extra.get("double"):
-                                ds["stats"]["doubles"] += 1
-                        elif changed:
-                            ds["stats"]["closes"] += 1
-                        ds["stats"]["last_change_ts"] = now
-                        event["stats"] = dict(ds["stats"])
-
-                    if is_button and val == 0:
-                        t = threading.Timer(_button_expire_seconds,
-                                            _button_expire_cb, args=[dev_eui])
-                        t.daemon = True
-                        t.start()
-                        ds["button_expire_timer"] = t
-
-                _post_to_dashboard("/ingest/event", event)
+            _handle_decoded_event(dev_eui, dtype, decoded, now)
 
         except Exception as exc:
             siot_token = None
@@ -612,22 +798,109 @@ def device_poller_thread(dev_eui: str):
         time.sleep(DEVICE_POLL_INTERVAL)
 
 
+def _handle_decoded_event(dev_eui: str, dtype: str, decoded: dict, now: float):
+    """Shared event handling for both DFRobot (SIOT) and UG65 paths."""
+    ds = _device_states.get(dev_eui)
+    if ds is None:
+        return
+
+    if device_classifier.is_analog(dtype):
+        rv    = decoded.get("raw_value")
+        event = {
+            "devEUI":      dev_eui,
+            "device_type": dtype,
+            "timestamp":   now,
+            "raw_value":   rv,
+            "unit":        decoded.get("unit"),
+        }
+        if decoded.get("extra"):
+            event["extra"] = decoded["extra"]
+
+        if rv is not None:
+            with ds["stats_lock"]:
+                st = ds["stats"]
+                if st["server_start"] is None:
+                    st["server_start"] = now
+                if st["min_value"] is None or rv < st["min_value"]:
+                    st["min_value"] = rv
+                if st["max_value"] is None or rv > st["max_value"]:
+                    st["max_value"] = rv
+                st["sum_value"]   = st.get("sum_value", 0.0) + rv
+                st["count_value"] = st.get("count_value", 0) + 1
+                event["stats"] = dict(st)
+
+        _post_to_dashboard("/ingest/event", event)
+
+    else:
+        val   = decoded["value"]
+        event = {
+            "devEUI":      dev_eui,
+            "device_type": dtype,
+            "value":       val,
+            "timestamp":   now,
+        }
+        if decoded.get("extra"):
+            event["extra"] = decoded["extra"]
+
+        is_button = (dtype == device_classifier.BUTTON)
+        changed   = (val != ds["last_value"])
+
+        if is_button:
+            old_timer = ds["button_expire_timer"]
+            if old_timer is not None:
+                old_timer.cancel()
+                ds["button_expire_timer"] = None
+
+        if changed:
+            ds["last_value"] = val
+
+        if changed or is_button:
+            with ds["stats_lock"]:
+                if ds["stats"]["server_start"] is None:
+                    ds["stats"]["server_start"] = now
+                if val == 0:
+                    ds["stats"]["opens"] += 1
+                    ev_extra = event.get("extra", {})
+                    if ev_extra.get("held"):
+                        ds["stats"]["holds"] += 1
+                    elif ev_extra.get("double"):
+                        ds["stats"]["doubles"] += 1
+                elif changed:
+                    ds["stats"]["closes"] += 1
+                ds["stats"]["last_change_ts"] = now
+                event["stats"] = dict(ds["stats"])
+
+            if is_button and val == 0:
+                t = threading.Timer(_button_expire_seconds,
+                                    _button_expire_cb, args=[dev_eui])
+                t.daemon = True
+                t.start()
+                ds["button_expire_timer"] = t
+
+        _post_to_dashboard("/ingest/event", event)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    print(f"Poller starting: gateway_id={GATEWAY_ID} type={GW_TYPE} host={GW_HOST}")
     init_devices()
     _devices_ready.wait(timeout=15)
 
-    with _device_registry_lock:
-        startup_devices = list(_device_registry)
+    if GW_TYPE != "ug65":
+        # DFRobot: start per-device SIOT polling threads
+        with _device_registry_lock:
+            startup_devices = list(_device_registry)
 
-    for dev in startup_devices:
-        threading.Thread(
-            target=device_poller_thread, args=(dev["devEUI"].upper(),),
-            daemon=True, name=f"poll-{dev['devEUI']}"
-        ).start()
+        for dev in startup_devices:
+            threading.Thread(
+                target=device_poller_thread, args=(dev["devEUI"].upper(),),
+                daemon=True, name=f"poll-{dev['devEUI']}"
+            ).start()
+    else:
+        print("UG65 mode: data arrives via ChirpStack HTTP integration (no SIOT polling)")
 
     threading.Thread(target=device_status_refresh, daemon=True).start()
 
-    print(f"Poller running  →  {DASHBOARD_URL}")
-    threading.Event().wait()   # block forever; all work is in daemon threads
+    print(f"Poller running  →  {DASHBOARD_URL}  (gateway: {GATEWAY_ID})")
+    threading.Event().wait()
