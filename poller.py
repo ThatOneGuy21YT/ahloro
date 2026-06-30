@@ -42,8 +42,9 @@ import device_classifier
 DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def _load_dotenv():
-    path = os.path.join(DIR, ".env")
+def _load_dotenv(path: str | None = None):
+    if path is None:
+        path = os.path.join(DIR, ".env")
     if not os.path.isfile(path):
         return
     with open(path) as f:
@@ -51,10 +52,18 @@ def _load_dotenv():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip())
+                os.environ[k.strip()] = v.strip()   # override, not setdefault
 
 
-_load_dotenv()
+# Support --env-file <path> as first two args so multiple instances can share
+# one script with different config files:
+#   python3 poller.py --env-file .env.ug65
+_env_file: str | None = None
+if len(sys.argv) >= 3 and sys.argv[1] == "--env-file":
+    _env_file = sys.argv[2]
+    sys.argv = [sys.argv[0]] + sys.argv[3:]   # remove the two args
+
+_load_dotenv(_env_file)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
