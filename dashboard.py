@@ -1306,7 +1306,7 @@ class Handler(BaseHTTPRequestHandler):
             _ensure_device_table(eui)
 
         with _device_registry_lock:
-            all_devs = list(_device_registry)
+            all_devs = [_build_device_out(d) for d in _device_registry]
         broadcast({"devices_update": all_devs})
         self._json_response(200, {"ok": True})
 
@@ -1476,6 +1476,8 @@ class Handler(BaseHTTPRequestHandler):
 
         dev_eui  = (body.get("devEUI") or "").upper()
         data_b64 = body.get("data", "")
+        print(f"lorawan_uplink: gw={gateway_id} devEUI={dev_eui or '(none)'} "
+              f"data={'yes' if data_b64 else 'no'} fPort={body.get('fPort','?')}")
         if not dev_eui or not data_b64:
             self._json_response(200, {"ok": True, "skipped": "no devEUI or data"})
             return

@@ -256,124 +256,133 @@ def _gw_login() -> str:
 
 # ── UG65 infrastructure setup ─────────────────────────────────────────────────
 
-_ug65_app_id:   str | None = None
-_ug65_app_lock  = threading.Lock()
-_UG65_FAILED    = "__setup_failed__"   # sentinel: all creation attempts failed
+_ug65_app_id:        str | None = None
+_ug65_app_lock       = threading.Lock()
+_UG65_FAILED         = "__setup_failed__"   # sentinel: no app found this cycle
+_ug65_no_app_warned  = 0.0                  # last time we printed the setup hint
 
 
 def _ug65_get_list(resp: dict) -> list:
-    """UG65 ChirpStack uses 'result' for most collections but 'apps' for applications."""
-    return resp.get("result") or resp.get("apps") or []
+    return resp.get("result") or resp.get("devices") or resp.get("apps") or []
 
 
 def _ug65_setup_http_integration(token: str, app_id: str):
     uplink_url = f"{DASHBOARD_URL}/ingest/lorawan_uplink?gateway_id={GATEWAY_ID}"
+    integration_body = {
+        "integration": {
+            "dataUpURL":               uplink_url,
+            "joinNotificationURL":      "",
+            "ackNotificationURL":       "",
+            "errNotificationURL":       "",
+            "statusNotificationURL":    "",
+            "locationNotificationURL":  "",
+            "headers": [
+                {"key": "X-Api-Key", "value": API_KEY},
+            ] if API_KEY else [],
+        }
+    }
+
+    # Check whether an HTTP integration already exists.
     try:
-        _gw_request("POST", f"applications/{app_id}/integrations/http", token=token,
-                    body={
-                        "integration": {
-                            "dataUpURL":               uplink_url,
-                            "joinNotificationURL":      "",
-                            "ackNotificationURL":       "",
-                            "errNotificationURL":       "",
-                            "statusNotificationURL":    "",
-                            "locationNotificationURL":  "",
-                            "headers": [
-                                {"key": "X-Api-Key", "value": API_KEY},
-                            ] if API_KEY else [],
-                        }
-                    })
-        print(f"UG65: HTTP integration → {uplink_url}")
+        existing = _gw_request("GET", f"applications/{app_id}/integrations/http",
+                                token=token)
+        current_url = (existing.get("integration") or existing).get("dataUpURL", "")
+        if current_url == uplink_url:
+            print(f"UG65: HTTP integration already configured → {uplink_url}")
+            return
+        # Wrong URL — try to update via PUT
+        _gw_request("PUT", f"applications/{app_id}/integrations/http",
+                    token=token, body=integration_body)
+        print(f"UG65: HTTP integration updated → {uplink_url}")
+        return
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            print(f"UG65: HTTP integration GET failed ({exc})", file=sys.stderr)
+
+    # Integration doesn't exist — try to create it via POST
+    try:
+        _gw_request("POST", f"applications/{app_id}/integrations/http",
+                    token=token, body=integration_body)
+        print(f"UG65: HTTP integration created → {uplink_url}")
+    except urllib.error.HTTPError as exc:
+        if exc.code in (404, 405):
+            print(f"UG65: HTTP integration API is read-only (HTTP {exc.code}) — "
+                  f"configure manually in the UG65 web UI:", file=sys.stderr)
+            print(f"  Application {app_id} → HTTP Integration → Uplink URL: {uplink_url}",
+                  file=sys.stderr)
+        else:
+            print(f"UG65: HTTP integration setup failed: {exc}", file=sys.stderr)
     except Exception as exc:
         print(f"UG65: HTTP integration setup failed: {exc}", file=sys.stderr)
 
 
 def _ug65_ensure_infrastructure(token: str) -> str:
-    """Ensure an application exists on UG65; returns its ID, or _UG65_FAILED.
+    """Return the UG65 ChirpStack application ID, or _UG65_FAILED if none exists.
 
-    The UG65's embedded ChirpStack treats applications as read-only via external
-    API (POST /api/applications returns 405).  If no application exists yet, the
-    user must create one through the UG65 web UI.  Once created it will be picked
-    up automatically on the next refresh.
+    The UG65 firmware blocks write operations on its embedded ChirpStack API
+    (POST /api/applications → 405).  The application must be created once via
+    the web UI or by running ug65_setup.py.  Once it exists it is discovered
+    here automatically on the next poll cycle.
     """
-    global _ug65_app_id
+    global _ug65_app_id, _ug65_no_app_warned
     with _ug65_app_lock:
         if _ug65_app_id and _ug65_app_id != _UG65_FAILED:
             return _ug65_app_id
-        _ug65_app_id = None   # reset so we always retry after a failure
+        _ug65_app_id = None   # always retry the GET each cycle
 
-        # Check if an application already exists (try with and without org filter)
+        # Check if an application already exists
         for qs in ("applications?limit=10&organizationID=1", "applications?limit=10"):
             try:
                 resp = _gw_request("GET", qs, token=token)
                 apps = _ug65_get_list(resp)
                 if apps:
                     _ug65_app_id = str(apps[0]["id"])
-                    print(f"UG65: using existing application ID={_ug65_app_id}")
+                    print(f"UG65: using existing application ID={_ug65_app_id} "
+                          f"({apps[0].get('name', '?')})")
                     _ug65_setup_http_integration(token, _ug65_app_id)
                     return _ug65_app_id
-                print(f"UG65: GET {qs} → empty list")
-                break   # GET succeeded but list is empty — don't keep trying
+                break   # GET succeeded but empty — don't keep trying variants
             except Exception as exc:
                 print(f"UG65: GET {qs} failed: {exc}", file=sys.stderr)
                 continue
 
-        # Find any existing service profile (try less-restrictive paths first)
-        sp_id = ""
-        for sp_qs in (
-            "service-profiles?limit=10",
-            "service-profiles?organizationID=1&limit=10",
-            "service-profiles?organizationID=1&networkServerID=1&limit=10",
-        ):
-            try:
-                sp_resp = _gw_request("GET", sp_qs, token=token)
-                sps = _ug65_get_list(sp_resp)
-                if sps:
-                    sp_id = str(sps[0]["id"])
-                    print(f"UG65: using service profile ID={sp_id}")
-                else:
-                    print(f"UG65: GET {sp_qs} → empty list")
-                break
-            except Exception as exc:
-                print(f"UG65: GET {sp_qs} failed: {exc}", file=sys.stderr)
-                continue
-
-        # Try to create an application (with sp_id, then without)
-        bodies = [
-            {"application": {"name": "DoorSense", "description": "DoorSense",
-                              "organizationID": "1", "serviceProfileID": sp_id}},
-            {"application": {"name": "DoorSense", "description": "DoorSense",
-                              "organizationID": "1"}},
-        ]
-        for body in bodies:
-            try:
-                app_resp = _gw_request("POST", "applications", token=token, body=body)
-                app_id   = str(app_resp.get("id", ""))
-                if app_id:
-                    print(f"UG65: created application ID={app_id}")
-                    _ug65_setup_http_integration(token, app_id)
-                    _ug65_app_id = app_id
-                    return app_id
-            except Exception as exc:
-                print(f"UG65: application POST failed ({exc})", file=sys.stderr)
-
-        print("UG65: infrastructure setup failed — will retry next cycle", file=sys.stderr)
+        # No application exists.  Print guidance at most once per 5 minutes.
+        now = time.time()
+        if now - _ug65_no_app_warned > 300:
+            _ug65_no_app_warned = now
+            print("UG65: no ChirpStack application found.", file=sys.stderr)
+            print("  Run:  python3 ug65_setup.py --env-file .env.ug65", file=sys.stderr)
+            print("  Or create an application named 'DoorSense' in the UG65 web UI",
+                  file=sys.stderr)
+            print(f"  at https://{GW_HOST}  → LoRa Network Server → Application",
+                  file=sys.stderr)
         return _UG65_FAILED
+
+
+def _ug65_get_device_profiles(token: str) -> list:
+    """Return existing device profiles; tries several query-string forms."""
+    for qs in (
+        "device-profiles?limit=50",
+        "device-profiles?organizationID=1&limit=50",
+        "device-profiles?organizationID=1&networkServerID=1&limit=50",
+    ):
+        try:
+            resp = _gw_request("GET", qs, token=token)
+            profiles = _ug65_get_list(resp)
+            if profiles:
+                return profiles
+        except Exception:
+            continue
+    return []
 
 
 def _ug65_ensure_device_profile(token: str, lorawan_spec: str,
                                  mode: str, device_class: str) -> str:
-    """Get or create a device profile matching the requested parameters."""
+    """Return the best-matching device profile ID, or '' if none available."""
     wants_join    = (mode == "OTAA")
     wants_class_c = (device_class == "C")
+    profiles      = _ug65_get_device_profiles(token)
 
-    resp     = _gw_request(
-        "GET", "device-profiles?organizationID=1&networkServerID=1&limit=50",
-        token=token,
-    )
-    profiles = _ug65_get_list(resp)
-
-    # Score existing profiles (same logic as DFRobot path)
     def _score(p):
         s = 0
         if p.get("supportsJoin") == wants_join:
@@ -396,34 +405,31 @@ def _ug65_ensure_device_profile(token: str, lorawan_spec: str,
 
     if profiles:
         best = max(profiles, key=_score)
-        if _score(best) >= 1000:   # at least join-type match
+        if _score(best) >= 1000:
             return str(best["id"])
 
-    # Create a new profile
-    mac_ver = lorawan_spec   # ChirpStack v3 uses "1.0.3" format
-    try:
-        prof_resp = _gw_request("POST", "device-profiles", token=token, body={
-            "deviceProfile": {
-                "name":              f"DoorSense-{mode}-{lorawan_spec}",
-                "organizationID":    "1",
-                "networkServerID":   "1",
-                "macVersion":        mac_ver,
-                "regParamsRevision": "A",
-                "supportsJoin":      wants_join,
-                "supportsClassB":    False,
-                "supportsClassC":    wants_class_c,
-                "rxDelay1":         1,
-                "rxDROffset1":      0,
-                "rxDataRate2":      8,
-                "rxFreq2":          923300000,
-            }
-        })
-        pid = str(prof_resp.get("id", ""))
+    # Try to create a new profile (will 405 on UG65, caught by caller)
+    mac_ver = lorawan_spec
+    prof_resp = _gw_request("POST", "device-profiles", token=token, body={
+        "deviceProfile": {
+            "name":              f"DoorSense-{mode}-{lorawan_spec}",
+            "organizationID":    "1",
+            "networkServerID":   "1",
+            "macVersion":        mac_ver,
+            "regParamsRevision": "A",
+            "supportsJoin":      wants_join,
+            "supportsClassB":    False,
+            "supportsClassC":    wants_class_c,
+            "rxDelay1":         1,
+            "rxDROffset1":      0,
+            "rxDataRate2":      8,
+            "rxFreq2":          923300000,
+        }
+    })
+    pid = str(prof_resp.get("id", ""))
+    if pid:
         print(f"UG65: created device profile ID={pid} ({mode}, {lorawan_spec})")
-        return pid
-    except Exception as exc:
-        print(f"UG65: device profile creation failed: {exc}", file=sys.stderr)
-        return profiles[0]["id"] if profiles else ""
+    return pid or (str(profiles[0]["id"]) if profiles else "")
 
 
 # ── Device initialisation ─────────────────────────────────────────────────────
@@ -438,7 +444,14 @@ def _fetch_gateway_devices() -> list:
         resp = _gw_request(
             "GET", f"devices?limit=100&applicationID={app_id}", token=token,
         )
-        return _ug65_get_list(resp)
+        devices = _ug65_get_list(resp)
+        if not devices:
+            # Show raw response keys so we can diagnose unexpected formats
+            keys = list(resp.keys()) if isinstance(resp, dict) else repr(resp)[:80]
+            total = resp.get("totalCount", "?") if isinstance(resp, dict) else "?"
+            print(f"UG65: devices GET returned 0 — totalCount={total} keys={keys}",
+                  file=sys.stderr)
+        return devices
     else:
         resp = _gw_request("GET", "devices?limit=100&applicationID=1", token=token)
         return resp.get("result", [])
@@ -612,12 +625,14 @@ def _process_ug65_additions(token: str, pending: list):
         name         = addition.get("name", eui)
         lorawan_spec = addition.get("lorawanSpec", "1.0.3")
         device_class = addition.get("deviceClass", "A")
+        api_ok       = False
         try:
             profile_id = _ug65_ensure_device_profile(
                 token, lorawan_spec, mode, device_class,
             )
             if not profile_id:
-                print(f"UG65 add {eui}: could not get/create device profile", file=sys.stderr)
+                print(f"UG65: no device profile available for {eui} — "
+                      f"create one in the UG65 web UI first", file=sys.stderr)
                 processed.append(eui)
                 continue
 
@@ -635,7 +650,6 @@ def _process_ug65_additions(token: str, pending: list):
             if mode == "OTAA":
                 app_key  = addition.get("appKey", "")
                 join_eui = addition.get("joinEUI") or "0000000000000000"
-                print(f"UG65 add {eui}: OTAA joinEUI={join_eui} appKey={app_key[:8]}...")
                 _gw_request("POST", f"devices/{eui}/keys", token=token, body={
                     "deviceKeys": {
                         "devEUI":  eui,
@@ -658,14 +672,47 @@ def _process_ug65_additions(token: str, pending: list):
                 })
 
             print(f"UG65: added device '{name}' ({eui}) [{mode}]")
+            api_ok = True
+
+        except urllib.error.HTTPError as exc:
+            if exc.code in (404, 405):
+                # UG65 ChirpStack API is read-only — print manual instructions once
+                _ug65_print_manual_device_steps(addition, app_id)
+            else:
+                print(f"UG65: add {eui} failed: {exc}", file=sys.stderr)
         except Exception as exc:
             print(f"UG65: add {eui} failed: {exc}", file=sys.stderr)
         finally:
+            # Always confirm so the device appears in DoorSense regardless.
+            # The user still needs to register it in the UG65 web UI for
+            # LoRaWAN frames to be received.
             processed.append(eui)
 
     if processed:
         _post_to_dashboard("/confirm_gateway_additions",
                            {"gateway_id": GATEWAY_ID, "euids": processed})
+
+
+def _ug65_print_manual_device_steps(addition: dict, app_id: str):
+    eui      = addition.get("devEUI", "").upper()
+    name     = addition.get("name", eui)
+    mode     = addition.get("mode", "OTAA")
+    print(f"UG65: ChirpStack API is read-only — add device manually:", file=sys.stderr)
+    print(f"  https://{GW_HOST}  → LoRa Network Server → Application {app_id} → Device",
+          file=sys.stderr)
+    print(f"  Name:   {name}", file=sys.stderr)
+    print(f"  DevEUI: {eui}", file=sys.stderr)
+    if mode == "OTAA":
+        app_key  = addition.get("appKey", "")
+        join_eui = addition.get("joinEUI") or "0000000000000000"
+        print(f"  Mode:    OTAA", file=sys.stderr)
+        print(f"  JoinEUI: {join_eui}", file=sys.stderr)
+        print(f"  AppKey:  {app_key}", file=sys.stderr)
+    else:
+        print(f"  Mode:    ABP", file=sys.stderr)
+        print(f"  DevAddr: {addition.get('devAddr', '')}", file=sys.stderr)
+        print(f"  NwkSKey: {addition.get('nwkSKey', '')}", file=sys.stderr)
+        print(f"  AppSKey: {addition.get('appSKey', '')}", file=sys.stderr)
 
 
 def init_devices():
