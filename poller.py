@@ -88,7 +88,7 @@ if not DASHBOARD_URL:
 API_KEY = os.environ.get("API_KEY", "")
 
 DEVICE_POLL_INTERVAL  = 1.0
-DEVICE_STATUS_REFRESH = 5
+DEVICE_STATUS_REFRESH = 0.5
 ONLINE_TIMEOUT        = 900
 
 _button_expire_seconds: float = 1.0
