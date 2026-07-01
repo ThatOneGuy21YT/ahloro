@@ -91,7 +91,8 @@ DEVICE_POLL_INTERVAL  = 1.0
 DEVICE_STATUS_REFRESH = 0.5
 ONLINE_TIMEOUT        = 900
 
-_button_expire_seconds: float = 1.0
+_button_expire_seconds:    float = 1.0
+_ug65_press_cooldown:      float = 3.0   # min seconds between synthetic UG65 button presses
 
 _gw_ssl = ssl.create_default_context()
 _gw_ssl.check_hostname = False
@@ -188,6 +189,7 @@ def _new_device_state() -> dict:
         "last_event_id":       None,   # for ug65 event dedup
         "last_new_data_at":    None,
         "ug65_last_seen_at":   None,   # tracks UG65 lastSeenAt for heartbeat detection
+        "ug65_last_press_time": 0.0,  # unix time of last synthetic press (cooldown)
         "button_expire_timer": None,
         "stats": {
             "opens": 0, "closes": 0, "holds": 0, "doubles": 0,
@@ -804,8 +806,9 @@ def device_status_refresh():
                     print(f"UG65: {eui} lastSeen → {new_seen}")
                     dtype = _get_device_type(eui)
                     if dtype == device_classifier.BUTTON:
-                        # Only fire if not already in pressed state (debounce retransmissions)
-                        if ds.get("last_value") != 0:
+                        since_last = now_ug65 - ds.get("ug65_last_press_time", 0.0)
+                        if since_last >= _ug65_press_cooldown:
+                            ds["ug65_last_press_time"] = now_ug65
                             decoded = device_classifier.decode_payload(dtype, eui, "01")
                             _handle_decoded_event(eui, dtype, decoded, now_ug65)
                     else:
