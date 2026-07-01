@@ -804,9 +804,10 @@ def device_status_refresh():
                     print(f"UG65: {eui} lastSeen → {new_seen}")
                     dtype = _get_device_type(eui)
                     if dtype == device_classifier.BUTTON:
-                        # lastSeen change on a button = button was pressed (0x01)
-                        decoded = device_classifier.decode_payload(dtype, eui, "01")
-                        _handle_decoded_event(eui, dtype, decoded, now_ug65)
+                        # Only fire if not already in pressed state (debounce retransmissions)
+                        if ds.get("last_value") != 0:
+                            decoded = device_classifier.decode_payload(dtype, eui, "01")
+                            _handle_decoded_event(eui, dtype, decoded, now_ug65)
                     else:
                         # No payload available; heartbeat-only (marks device online)
                         _post_to_dashboard(
