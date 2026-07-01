@@ -786,8 +786,9 @@ def device_status_refresh():
                 _post_to_dashboard("/ingest/remove_device", {"devEUI": eui})
                 print(f"Device removed: {eui}")
 
-            # UG65: detect lastSeenAt changes and send heartbeats to dashboard
+            # UG65: detect lastSeenAt changes and synthesize events / send heartbeats
             if GW_TYPE == "ug65":
+                now_ug65 = time.time()
                 for dev in fresh:
                     eui      = dev["devEUI"].upper()
                     new_seen = dev.get("lastSeenAt")
@@ -796,10 +797,18 @@ def device_status_refresh():
                     ds = _device_states.get(eui)
                     if ds is None:
                         continue
-                    old_seen = ds.get("ug65_last_seen_at")
-                    if new_seen != old_seen:
-                        ds["ug65_last_seen_at"] = new_seen
-                        print(f"UG65: {eui} lastSeen → {new_seen}")
+                    if new_seen == ds.get("ug65_last_seen_at"):
+                        continue
+                    ds["ug65_last_seen_at"] = new_seen
+                    ds["last_new_data_at"]  = now_ug65
+                    print(f"UG65: {eui} lastSeen → {new_seen}")
+                    dtype = _get_device_type(eui)
+                    if dtype == device_classifier.BUTTON:
+                        # lastSeen change on a button = button was pressed (0x01)
+                        decoded = device_classifier.decode_payload(dtype, eui, "01")
+                        _handle_decoded_event(eui, dtype, decoded, now_ug65)
+                    else:
+                        # No payload available; heartbeat-only (marks device online)
                         _post_to_dashboard(
                             f"/ingest/lorawan_uplink?gateway_id={GATEWAY_ID}",
                             {"devEUI": eui},
