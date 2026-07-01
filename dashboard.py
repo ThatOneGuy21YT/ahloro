@@ -1460,13 +1460,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_ingest_lorawan_uplink(self):
         """Receive an uplink event posted by ChirpStack HTTP integration."""
-        if not self._check_api_key():
-            return
         import base64 as _b64
         import urllib.parse
 
-        qs        = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        qs         = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         gateway_id = (qs.get("gateway_id") or ["unknown"])[0]
+        presented  = self.headers.get("X-Api-Key", "")
+        print(f"lorawan_uplink: from={self.client_address[0]} gw={gateway_id} "
+              f"key={'ok' if presented == API_KEY else ('missing' if not presented else 'WRONG')}")
+
+        if not self._check_api_key():
+            return
 
         try:
             body = self._read_json()
@@ -1476,10 +1480,18 @@ class Handler(BaseHTTPRequestHandler):
 
         dev_eui  = (body.get("devEUI") or "").upper()
         data_b64 = body.get("data", "")
-        print(f"lorawan_uplink: gw={gateway_id} devEUI={dev_eui or '(none)'} "
+        print(f"lorawan_uplink: devEUI={dev_eui or '(none)'} "
               f"data={'yes' if data_b64 else 'no'} fPort={body.get('fPort','?')}")
-        if not dev_eui or not data_b64:
-            self._json_response(200, {"ok": True, "skipped": "no devEUI or data"})
+        if not dev_eui:
+            self._json_response(400, {"error": "devEUI required"})
+            return
+        if not data_b64:
+            # Heartbeat from UG65 lastSeen poller: mark online, no event emitted
+            if dev_eui not in _device_states:
+                _device_states[dev_eui] = _new_device_state()
+            _device_states[dev_eui]["last_new_data_at"] = time.time()
+            _device_gateway[dev_eui] = gateway_id
+            self._json_response(200, {"ok": True, "heartbeat": True})
             return
 
         try:

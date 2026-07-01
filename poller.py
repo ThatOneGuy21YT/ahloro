@@ -187,6 +187,7 @@ def _new_device_state() -> dict:
         "last_siot_ts":        None,
         "last_event_id":       None,   # for ug65 event dedup
         "last_new_data_at":    None,
+        "ug65_last_seen_at":   None,   # tracks UG65 lastSeenAt for heartbeat detection
         "button_expire_timer": None,
         "stats": {
             "opens": 0, "closes": 0, "holds": 0, "doubles": 0,
@@ -784,6 +785,25 @@ def device_status_refresh():
             for eui in removed:
                 _post_to_dashboard("/ingest/remove_device", {"devEUI": eui})
                 print(f"Device removed: {eui}")
+
+            # UG65: detect lastSeenAt changes and send heartbeats to dashboard
+            if GW_TYPE == "ug65":
+                for dev in fresh:
+                    eui      = dev["devEUI"].upper()
+                    new_seen = dev.get("lastSeenAt")
+                    if not new_seen:
+                        continue
+                    ds = _device_states.get(eui)
+                    if ds is None:
+                        continue
+                    old_seen = ds.get("ug65_last_seen_at")
+                    if new_seen != old_seen:
+                        ds["ug65_last_seen_at"] = new_seen
+                        print(f"UG65: {eui} lastSeen → {new_seen}")
+                        _post_to_dashboard(
+                            f"/ingest/lorawan_uplink?gateway_id={GATEWAY_ID}",
+                            {"devEUI": eui},
+                        )
 
             _post_devices_update()
 
