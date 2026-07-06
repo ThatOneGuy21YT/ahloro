@@ -14,7 +14,12 @@ traffic is encoded with 256 bit AES keys and is sent securely by a user defined 
 ## User Account Control (OAuth)
 Using OAuth from Google's APIs, there is now email login support as well as a variable based whitelist for access. By default the entire site is blocked until the user logs in, but even after login, all hidden files and scripts cannot be accessed remotely.
 
-Though not implemented yet, I plan to add support for devices per account along with the multi gateway support. Likely a dropdown of sorts will let you select the gateway you want to add a device to (or read from???).
+Though not implemented yet, I plan to add support for devices to be attached to accounts across multiple gateways. Or at the very least, I want to be able to assign gateways to individual accounts.
+
+## Multi-Gateway/Poller Support
+Implemented the Milesight UG65 as a secondary option for a gateway. by having multiple pollers configured and sending data to the same dashboard, you can see devices across an array of gateways in one place. UG65 requires browser token to access data since chirpstack is read only. Once you log in, the token expiration isn't enforced (probably a bug, but definitely taking advantage of it) and by setting a variable as the token (can be found in inspect window in most requests) then the payload can be grabbed from the gateway directly.
+
+This method will probably need to be updated in the future for newer firmware releases, but it's acceptable for now as long as it's done within a closed non production environment.
 
 # WIP Features
 ## Device Classifier
@@ -24,8 +29,7 @@ The device_classifier.py has not been thoroughly tested, if the correct device t
 Sound Devices are in testing and have not been properly configured, do not use for production environments.
 
 # Planned Features/Roadmap
-## Multi-Gateway
-I plan to implement the ability to gain data from multiple gateways at once from different brands as I get the ability to, though it is not the primary goal at this time.
+## N/A
 
 # Dependencies 
 psycopg2, postgresql, a computer??????
