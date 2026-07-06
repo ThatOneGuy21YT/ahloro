@@ -17,6 +17,9 @@ Configuration (env vars, or a .env file in the same directory):
   GW_PASS         ChirpStack admin password (plain text)
   GW_PASS_HASH    MD5-base64 of ChirpStack password — overrides GW_PASS for
                   ug65 type (where the API requires pre-hashed passwords)
+  GW_STATIC_TOKEN ug65 only: bearer JWT to use when internal/login is
+                  unavailable — capture the "token" cookie from an
+                  authenticated browser session on the UG65 web UI
   SIOT_USER       SIOT broker username (dfrobot only, default: siot)
   SIOT_PASS       SIOT broker password (dfrobot only)
   DASHBOARD_URL   Full base URL of the dashboard (required)
@@ -74,6 +77,7 @@ GW_HOST          = os.environ.get("GW_HOST",          "10.8.8.8")
 GW_EMAIL         = os.environ.get("GW_EMAIL",         "admin")
 GW_PASS          = os.environ.get("GW_PASS",          "")
 GW_PASS_HASH     = os.environ.get("GW_PASS_HASH",     "")   # MD5-base64, overrides GW_PASS for ug65
+GW_STATIC_TOKEN  = os.environ.get("GW_STATIC_TOKEN",  "")   # ug65 only: bearer JWT fallback when internal/login is unavailable
 
 GW_BASE = f"https://{GW_HOST}/api"
 
@@ -92,7 +96,6 @@ DEVICE_STATUS_REFRESH = 0.5
 ONLINE_TIMEOUT        = 900
 
 _button_expire_seconds:    float = 1.0
-_ug65_press_cooldown:      float = 3.0   # min seconds between synthetic UG65 button presses
 
 _gw_ssl = ssl.create_default_context()
 _gw_ssl.check_hostname = False
@@ -189,7 +192,8 @@ def _new_device_state() -> dict:
         "last_event_id":       None,   # for ug65 event dedup
         "last_new_data_at":    None,
         "ug65_last_seen_at":   None,   # tracks UG65 lastSeenAt for heartbeat detection
-        "ug65_last_press_time": 0.0,  # unix time of last synthetic press (cooldown)
+        "ug65_seen_fcnt":      {},     # devAddr -> highest uplink fCnt forwarded (dedup;
+                                        # keyed per-session since a rejoin resets fCnt to 0)
         "button_expire_timer": None,
         "stats": {
             "opens": 0, "closes": 0, "holds": 0, "doubles": 0,
@@ -199,6 +203,21 @@ def _new_device_state() -> dict:
         },
         "stats_lock": threading.Lock(),
     }
+
+
+def _ug65_seed_fcnt(dev: dict) -> dict:
+    """Seed ug65_seen_fcnt for the device's *current* session (devAddr) from
+    its current fCntUp, so newly-tracked devices don't replay old history as
+    fresh events on first sight. A future rejoin gets a new devAddr and is
+    intentionally left unseeded — its fCnt starts at 0 and should be treated
+    as new, not compared against a previous session's high-water mark."""
+    dev_addr = dev.get("devAddr")
+    if not dev_addr:
+        return {}
+    try:
+        return {dev_addr: int(dev.get("fCntUp", 0)) - 1}
+    except (TypeError, ValueError):
+        return {}
 
 
 def _get_device_name(eui: str) -> str:
@@ -257,12 +276,45 @@ def _gw_login() -> str:
     return auth["jwt"]
 
 
+# Cache the login token instead of re-logging in on every poll cycle: with
+# internal/login broken (as it was during the UG65 credential investigation),
+# calling _gw_login() every 0.5s would hammer the endpoint and re-trigger its
+# lockout. We attempt a real login exactly once per process lifetime and fall
+# back to GW_STATIC_TOKEN (a JWT captured from an already-authenticated
+# browser session) if that attempt fails.
+_cached_token: str | None = None
+_token_lock   = threading.Lock()
+
+
+def _get_token() -> str:
+    global _cached_token
+    with _token_lock:
+        if _cached_token:
+            return _cached_token
+        try:
+            _cached_token = _gw_login()
+        except Exception as exc:
+            if GW_TYPE == "ug65" and GW_STATIC_TOKEN:
+                print(f"Gateway login failed ({exc}); using GW_STATIC_TOKEN fallback",
+                      file=sys.stderr)
+                _cached_token = GW_STATIC_TOKEN
+            else:
+                raise
+        return _cached_token
+
+
 # ── UG65 infrastructure setup ─────────────────────────────────────────────────
 
 _ug65_app_id:        str | None = None
 _ug65_app_lock       = threading.Lock()
 _UG65_FAILED         = "__setup_failed__"   # sentinel: no app found this cycle
 _ug65_no_app_warned  = 0.0                  # last time we printed the setup hint
+
+# devEUIs the dashboard asked us to delete but the UG65's read-only ChirpStack
+# API refused (404/405) to actually remove. Since the device stays in the
+# gateway's own device list forever, we hide it ourselves so it doesn't keep
+# reappearing on the dashboard after every device_status_refresh cycle.
+_ug65_hidden_euis: set[str] = set()
 
 
 def _ug65_get_list(resp: dict) -> list:
@@ -339,9 +391,13 @@ def _ug65_ensure_infrastructure(token: str) -> str:
                 resp = _gw_request("GET", qs, token=token)
                 apps = _ug65_get_list(resp)
                 if apps:
-                    _ug65_app_id = str(apps[0]["id"])
+                    doorsense = next(
+                        (a for a in apps if a.get("name", "").lower() == "doorsense"), None,
+                    )
+                    chosen = doorsense or apps[0]
+                    _ug65_app_id = str(chosen["id"])
                     print(f"UG65: using existing application ID={_ug65_app_id} "
-                          f"({apps[0].get('name', '?')})")
+                          f"({chosen.get('name', '?')})")
                     _ug65_setup_http_integration(token, _ug65_app_id)
                     return _ug65_app_id
                 break   # GET succeeded but empty — don't keep trying variants
@@ -362,84 +418,83 @@ def _ug65_ensure_infrastructure(token: str) -> str:
         return _UG65_FAILED
 
 
-def _ug65_get_device_profiles(token: str) -> list:
-    """Return existing device profiles; tries several query-string forms."""
-    for qs in (
-        "device-profiles?limit=50",
-        "device-profiles?organizationID=1&limit=50",
-        "device-profiles?organizationID=1&networkServerID=1&limit=50",
-    ):
-        try:
-            resp = _gw_request("GET", qs, token=token)
-            profiles = _ug65_get_list(resp)
-            if profiles:
-                return profiles
-        except Exception:
-            continue
-    return []
+# ── UG65 device add/delete via the "ur" web-UI API ────────────────────────────
+#
+# The stock ChirpStack REST paths (device-profiles, devices POST/keys/
+# activation) are all blocked (404/405) on this firmware. The UG65 web UI's
+# own "LoRa Network Server → Device" page instead calls a Milesight-specific
+# API under /api/ur* (e.g. urpackets, urdevices) that IS writable. Captured
+# from the browser: POST /api/urdevices to add, DELETE /api/urdevices/{eui}
+# to remove — same Bearer-token auth as everything else.
+
+def _ug65_get_ur_profiles(token: str) -> list:
+    resp = _gw_request("GET", "urdevices?limit=1&offset=0&organizationID=1", token=token)
+    return resp.get("profileResult") or []
 
 
-def _ug65_ensure_device_profile(token: str, lorawan_spec: str,
-                                 mode: str, device_class: str) -> str:
-    """Return the best-matching device profile ID, or '' if none available."""
-    wants_join    = (mode == "OTAA")
-    wants_class_c = (device_class == "C")
-    profiles      = _ug65_get_device_profiles(token)
+def _ug65_match_ur_profile(profiles: list, wants_join: bool) -> str:
+    """Return a profileID (UUID) matching the join mode, or '' if none fit."""
+    candidates = [p for p in profiles if p.get("supportsJoin") == wants_join]
+    if not candidates:
+        return ""
+    exact_name = "ClassA-OTAA" if wants_join else "ClassA-ABP"
+    for p in candidates:
+        if p.get("profileName") == exact_name:
+            return p["profileID"]
+    return candidates[0]["profileID"]
 
-    def _score(p):
-        s = 0
-        if p.get("supportsJoin") == wants_join:
-            s += 1000
-        mac = p.get("macVersion", "")
-        if mac and lorawan_spec:
-            if mac == lorawan_spec:
-                s += 100
-            else:
-                mp, sp2 = mac.split("."), lorawan_spec.split(".")
-                if len(mp) >= 2 and len(sp2) >= 2 and mp[:2] == sp2[:2]:
-                    s += 40
-                elif mp[:1] == sp2[:1]:
-                    s += 10
-        if wants_class_c and p.get("supportsClassC"):
-            s += 20
-        elif not wants_class_c and not p.get("supportsClassC"):
-            s += 20
-        return s
 
-    if profiles:
-        best = max(profiles, key=_score)
-        if _score(best) >= 1000:
-            return str(best["id"])
+def _ug65_match_payload_codec(token: str, eui: str) -> str:
+    """Look up the codec Milesight's own product database matches for this
+    devEUI's OUI (e.g. "10"/WS101 for their own sensors). Falls back to "0"
+    (no specific codec) for third-party devices — those require a real
+    AppKey since isDefaultAppKey only works for recognized Milesight models."""
+    resp = _gw_request("GET", f"payloadcodecs/{eui}/device", token=token)
+    return str(resp.get("bestMatchID", "0"))
 
-    # Try to create a new profile (will 405 on UG65, caught by caller)
-    mac_ver = lorawan_spec
-    prof_resp = _gw_request("POST", "device-profiles", token=token, body={
-        "deviceProfile": {
-            "name":              f"DoorSense-{mode}-{lorawan_spec}",
-            "organizationID":    "1",
-            "networkServerID":   "1",
-            "macVersion":        mac_ver,
-            "regParamsRevision": "A",
-            "supportsJoin":      wants_join,
-            "supportsClassB":    False,
-            "supportsClassC":    wants_class_c,
-            "rxDelay1":         1,
-            "rxDROffset1":      0,
-            "rxDataRate2":      8,
-            "rxFreq2":          923300000,
-        }
+
+def _ug65_add_device_via_ur(token: str, app_id: str, addition: dict) -> None:
+    """Add a device through the UG65's own web-UI API. Raises on failure —
+    callers should fall back to printing manual instructions."""
+    mode = addition.get("mode", "OTAA")
+    if mode != "OTAA":
+        raise NotImplementedError("urdevices ABP payload shape is unconfirmed")
+
+    eui     = addition.get("devEUI", "").upper()
+    name    = addition.get("name", eui)
+    app_key = addition.get("appKey", "")
+
+    profile_id = _ug65_match_ur_profile(_ug65_get_ur_profiles(token), wants_join=True)
+    if not profile_id:
+        raise RuntimeError("no matching OTAA device profile found")
+
+    codec_id = _ug65_match_payload_codec(token, eui)
+    if codec_id == "0" and not app_key:
+        raise RuntimeError(
+            f"{eui} isn't a recognized Milesight product — a real AppKey is "
+            f"required (isDefaultAppKey only works for matched Milesight models)"
+        )
+
+    resp = _gw_request("POST", "urdevices", token=token, body={
+        "name":            name,
+        "description":     name,
+        "devEUI":          eui,
+        "profileID":       profile_id,
+        "payloadCodecID":  codec_id,
+        "isDefaultAppKey": not bool(app_key),
+        "appKey":          app_key,
+        "applicationID":   app_id,
+        "skipFCntCheck":   True,
     })
-    pid = str(prof_resp.get("id", ""))
-    if pid:
-        print(f"UG65: created device profile ID={pid} ({mode}, {lorawan_spec})")
-    return pid or (str(profiles[0]["id"]) if profiles else "")
+    if resp.get("error"):
+        raise RuntimeError(f"urdevices add rejected: {resp}")
 
 
 # ── Device initialisation ─────────────────────────────────────────────────────
 
 
 def _fetch_gateway_devices() -> list:
-    token = _gw_login()
+    token = _get_token()
     if GW_TYPE == "ug65":
         app_id = _ug65_ensure_infrastructure(token)
         if app_id == _UG65_FAILED:
@@ -448,6 +503,9 @@ def _fetch_gateway_devices() -> list:
             "GET", f"devices?limit=100&applicationID={app_id}", token=token,
         )
         devices = _ug65_get_list(resp)
+        if _ug65_hidden_euis:
+            devices = [d for d in devices
+                       if d.get("devEUI", "").upper() not in _ug65_hidden_euis]
         if not devices:
             # Show raw response keys so we can diagnose unexpected formats
             keys = list(resp.keys()) if isinstance(resp, dict) else repr(resp)[:80]
@@ -467,20 +525,39 @@ def _get_pending_gateway_deletions() -> list[str]:
     return data.get("euids", [])
 
 
+def _ug65_print_manual_delete_steps(eui: str):
+    print(f"UG65: ChirpStack API is read-only — remove device manually:", file=sys.stderr)
+    print(f"  https://{GW_HOST}  → LoRa Network Server → Application → Device → {eui} → Delete",
+          file=sys.stderr)
+
+
 def _process_gateway_deletions():
     pending = _get_pending_gateway_deletions()
     if not pending:
         return
     try:
-        token   = _gw_login()
+        token   = _get_token()
         deleted = []
         for eui in pending:
+            delete_path = f"urdevices/{eui}" if GW_TYPE == "ug65" else f"devices/{eui}"
             try:
-                _gw_request("DELETE", f"devices/{eui}", token=token)
+                _gw_request("DELETE", delete_path, token=token)
                 _device_states.pop(eui, None)
                 _device_type_store.pop(eui, None)
                 deleted.append(eui)
                 print(f"Gateway: deleted device {eui}")
+            except urllib.error.HTTPError as exc:
+                if GW_TYPE == "ug65" and exc.code in (404, 405):
+                    # Fallback for anything the urdevices API itself won't
+                    # remove — hide it locally so it stops reappearing on
+                    # the dashboard even though it's still on the gateway.
+                    _ug65_hidden_euis.add(eui)
+                    _device_states.pop(eui, None)
+                    _device_type_store.pop(eui, None)
+                    _ug65_print_manual_delete_steps(eui)
+                    deleted.append(eui)
+                else:
+                    print(f"Gateway: delete {eui} failed: {exc}", file=sys.stderr)
             except Exception as exc:
                 print(f"Gateway: delete {eui} failed: {exc}", file=sys.stderr)
         if deleted:
@@ -502,7 +579,7 @@ def _process_gateway_additions():
     if not pending:
         return
     try:
-        token = _gw_login()
+        token = _get_token()
 
         if GW_TYPE == "ug65":
             _process_ug65_additions(token, pending)
@@ -623,72 +700,20 @@ def _process_ug65_additions(token: str, pending: list):
     processed = []
 
     for addition in pending:
-        eui          = addition.get("devEUI", "").upper()
-        mode         = addition.get("mode", "OTAA")
-        name         = addition.get("name", eui)
-        lorawan_spec = addition.get("lorawanSpec", "1.0.3")
-        device_class = addition.get("deviceClass", "A")
-        api_ok       = False
+        eui  = addition.get("devEUI", "").upper()
+        mode = addition.get("mode", "OTAA")
+        name = addition.get("name", eui)
         try:
-            profile_id = _ug65_ensure_device_profile(
-                token, lorawan_spec, mode, device_class,
-            )
-            if not profile_id:
-                print(f"UG65: no device profile available for {eui} — "
-                      f"create one in the UG65 web UI first", file=sys.stderr)
-                processed.append(eui)
-                continue
-
-            _gw_request("POST", "devices", token=token, body={
-                "device": {
-                    "applicationID":  app_id,
-                    "devEUI":          eui,
-                    "name":            name,
-                    "deviceProfileID": profile_id,
-                    "description":     "",
-                    "skipFCntCheck":   False,
-                }
-            })
-
-            if mode == "OTAA":
-                app_key  = addition.get("appKey", "")
-                join_eui = addition.get("joinEUI") or "0000000000000000"
-                _gw_request("POST", f"devices/{eui}/keys", token=token, body={
-                    "deviceKeys": {
-                        "devEUI":  eui,
-                        "appEUI":  join_eui,
-                        "appEui":  join_eui,
-                        "joinEUI": join_eui,
-                        "nwkKey":  app_key,
-                        "appKey":  app_key,
-                    }
-                })
-            else:
-                nwk = addition.get("nwkSKey", "")
-                _gw_request("POST", f"devices/{eui}/activation", token=token, body={
-                    "deviceActivation": {
-                        "devEUI":  eui,
-                        "devAddr": addition.get("devAddr", ""),
-                        "appSKey": addition.get("appSKey", ""),
-                        "nwkSKey": nwk,
-                    }
-                })
-
-            print(f"UG65: added device '{name}' ({eui}) [{mode}]")
-            api_ok = True
-
-        except urllib.error.HTTPError as exc:
-            if exc.code in (404, 405):
-                # UG65 ChirpStack API is read-only — print manual instructions once
-                _ug65_print_manual_device_steps(addition, app_id)
-            else:
-                print(f"UG65: add {eui} failed: {exc}", file=sys.stderr)
+            _ug65_add_device_via_ur(token, app_id, addition)
+            print(f"UG65: added device '{name}' ({eui}) [{mode}] via urdevices API")
         except Exception as exc:
-            print(f"UG65: add {eui} failed: {exc}", file=sys.stderr)
+            print(f"UG65: automated add for {eui} failed ({exc}) — manual steps required:",
+                  file=sys.stderr)
+            _ug65_print_manual_device_steps(addition, app_id)
         finally:
-            # Always confirm so the device appears in DoorSense regardless.
-            # The user still needs to register it in the UG65 web UI for
-            # LoRaWAN frames to be received.
+            # Always confirm so the pending queue clears regardless. If the
+            # automated add failed, the user still needs to register it
+            # manually — see the printed instructions above.
             processed.append(eui)
 
     if processed:
@@ -733,6 +758,8 @@ def init_devices():
         eui = dev["devEUI"].upper()
         if eui not in _device_states:
             _device_states[eui] = _new_device_state()
+            if GW_TYPE == "ug65":
+                _device_states[eui]["ug65_seen_fcnt"] = _ug65_seed_fcnt(dev)
         if eui not in _device_type_store:
             _classify_and_store(eui, dev.get("name", eui))
 
@@ -764,8 +791,16 @@ def device_status_refresh():
                 for dev in fresh:
                     eui = dev["devEUI"].upper()
                     by_eui[eui] = dev
-                    if eui in added_euids:
+                    # Recreate state whenever it's actually missing, not just
+                    # on a registry-membership change — a delete+re-add that
+                    # lands in the same poll cycle never registers as a
+                    # membership change (the device never "left" the
+                    # registry from this diff's perspective) even though
+                    # _process_gateway_deletions() already popped its state.
+                    if eui in added_euids or eui not in _device_states:
                         _device_states[eui] = _new_device_state()
+                        if GW_TYPE == "ug65":
+                            _device_states[eui]["ug65_seen_fcnt"] = _ug65_seed_fcnt(dev)
                         if eui not in _device_type_store:
                             _classify_and_store(eui, dev.get("name", eui))
                         added.append(eui)
@@ -788,7 +823,9 @@ def device_status_refresh():
                 _post_to_dashboard("/ingest/remove_device", {"devEUI": eui})
                 print(f"Device removed: {eui}")
 
-            # UG65: detect lastSeenAt changes and synthesize events / send heartbeats
+            # UG65: detect lastSeenAt changes and send heartbeats so devices
+            # show online promptly. Actual events (with real hex payloads)
+            # come from ug65_packets_poller() via /api/urpackets.
             if GW_TYPE == "ug65":
                 now_ug65 = time.time()
                 for dev in fresh:
@@ -804,24 +841,118 @@ def device_status_refresh():
                     ds["ug65_last_seen_at"] = new_seen
                     ds["last_new_data_at"]  = now_ug65
                     print(f"UG65: {eui} lastSeen → {new_seen}")
-                    dtype = _get_device_type(eui)
-                    if dtype == device_classifier.BUTTON:
-                        since_last = now_ug65 - ds.get("ug65_last_press_time", 0.0)
-                        if since_last >= _ug65_press_cooldown:
-                            ds["ug65_last_press_time"] = now_ug65
-                            decoded = device_classifier.decode_payload(dtype, eui, "01")
-                            _handle_decoded_event(eui, dtype, decoded, now_ug65)
-                    else:
-                        # No payload available; heartbeat-only (marks device online)
-                        _post_to_dashboard(
-                            f"/ingest/lorawan_uplink?gateway_id={GATEWAY_ID}",
-                            {"devEUI": eui},
-                        )
+                    _post_to_dashboard(
+                        f"/ingest/lorawan_uplink?gateway_id={GATEWAY_ID}",
+                        {"devEUI": eui},
+                    )
 
             _post_devices_update()
 
         except Exception as exc:
             print(f"device_status_refresh error: {exc}", file=sys.stderr)
+
+
+# ── UG65 raw packet polling ───────────────────────────────────────────────────
+#
+# The UG65's ChirpStack HTTP integration is read-only on this firmware (POST
+# .../integrations/http → 405), so it can't be configured to push uplinks to
+# the dashboard. Instead we poll the UG65's own web-UI "Packets" endpoint
+# (/api/urpackets — the same call its "LoRa Network Server → Packets" page
+# makes) and forward new uplinks to the dashboard ourselves, mimicking what
+# the HTTP integration would have sent.
+
+_UG65_PACKETS_POLL_INTERVAL = 1.0
+_UG65_ORG_ID                = "1"
+
+
+def _ug65_fetch_packets(token: str, limit: int = 20) -> list:
+    resp = _gw_request(
+        "GET", f"urpackets?offset=0&limit={limit}&organizationID={_UG65_ORG_ID}",
+        token=token,
+    )
+    return resp.get("packets") or []   # .get(..., []) alone won't catch an explicit null
+
+
+def ug65_packets_poller():
+    global _cached_token
+    while True:
+        time.sleep(_UG65_PACKETS_POLL_INTERVAL)
+        try:
+            _ug65_packets_poll_once()
+        except Exception as exc:
+            # Never let one bad cycle kill this thread permanently — it runs
+            # unsupervised as a daemon thread, so an uncaught exception here
+            # would silently stop all future UG65 event forwarding while
+            # device_status_refresh() keeps running fine in its own thread.
+            print(f"UG65 packets: poll cycle failed: {exc}", file=sys.stderr)
+
+
+def _ug65_packets_poll_once():
+    global _cached_token
+    try:
+        token = _get_token()
+    except Exception as exc:
+        print(f"UG65 packets: no token available: {exc}", file=sys.stderr)
+        return
+
+    try:
+        packets = _ug65_fetch_packets(token)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            _cached_token = None   # force a fresh login attempt next cycle
+        print(f"UG65 packets: fetch failed ({exc})", file=sys.stderr)
+        return
+    except Exception as exc:
+        print(f"UG65 packets: fetch failed ({exc})", file=sys.stderr)
+        return
+
+    now = time.time()
+    # The endpoint returns newest-first; walk oldest-first so fCnt dedup
+    # advances in order.
+    for pkt in reversed(packets):
+        try:
+            _ug65_handle_packet(pkt, now)
+        except Exception as exc:
+            print(f"UG65 packets: failed to process packet ({exc}): {pkt}", file=sys.stderr)
+
+
+def _ug65_handle_packet(pkt: dict, now: float):
+    if not str(pkt.get("type", "")).startswith("Up"):
+        return   # downlinks / acks carry no application payload
+    raw_hex = pkt.get("payloadHex") or ""
+    if not raw_hex:
+        return
+
+    eui = (pkt.get("devEUI") or "").upper()
+    ds  = _device_states.get(eui)
+    if ds is None:
+        return
+
+    try:
+        fcnt = int(pkt.get("fCnt"))
+    except (TypeError, ValueError):
+        return
+    dev_addr = pkt.get("devAddr") or ""
+    seen     = ds["ug65_seen_fcnt"]
+    if fcnt <= seen.get(dev_addr, -1):
+        return   # already forwarded for this session
+
+    seen[dev_addr]         = fcnt
+    ds["last_new_data_at"] = now
+
+    body = {
+        "devEUI": eui,
+        "data":   base64.b64encode(bytes.fromhex(raw_hex)).decode(),
+    }
+    fport = pkt.get("fPort")
+    if fport not in (None, "-", ""):
+        try:
+            body["fPort"] = int(fport)
+        except ValueError:
+            pass
+
+    _post_to_dashboard(f"/ingest/lorawan_uplink?gateway_id={GATEWAY_ID}", body)
+    print(f"UG65: {eui} fCnt={fcnt} hex={raw_hex}")
 
 
 # ── Button expiry ─────────────────────────────────────────────────────────────
@@ -1010,7 +1141,8 @@ if __name__ == "__main__":
                 daemon=True, name=f"poll-{dev['devEUI']}"
             ).start()
     else:
-        print("UG65 mode: data arrives via ChirpStack HTTP integration (no SIOT polling)")
+        print("UG65 mode: polling /api/urpackets for real uplink payloads")
+        threading.Thread(target=ug65_packets_poller, daemon=True, name="ug65-packets").start()
 
     threading.Thread(target=device_status_refresh, daemon=True).start()
 
