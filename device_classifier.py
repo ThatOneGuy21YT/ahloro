@@ -118,12 +118,15 @@ def set_temp_byte_config(temp_start: int, temp_divisor: float,
 
 
 # ── Sound byte config (configurable at runtime) ──────────────────────────────
-# Default: bytes 5-6 as big-endian uint16, dB×10 encoding (divisor=10).
+# Default: bytes 8-9 as little-endian uint16, dB×10 encoding (divisor=10).
+# Derived from live DFRobot Sound Sensor payloads (devEUI 24E124743C210453):
+# e.g. 017564055B052102A3012102 -> bytes[8:10] LE = 0x01A3 = 419 -> 41.9 dB,
+# matching the sensor's actual LAeq reading at capture time (~40-42 dB).
 _sound_byte_config: dict = {
-    "start":         5,      # start byte of sound field
+    "start":         8,      # start byte of sound field
     "size":          2,      # bytes to read: 1 (uint8) or 2 (uint16)
     "divisor":       10.0,   # divide raw int by this to get dB (dB×10 → divisor 10)
-    "little_endian": False,  # byte order for 2-byte reads
+    "little_endian": True,   # byte order for 2-byte reads
     "loud_db":       60.0,   # dB threshold above which is LOUD (value=0)
 }
 
