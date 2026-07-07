@@ -380,6 +380,27 @@
     .widget:hover .resize-handle { opacity: 1; }
     .widget.is-resizing { transition: none !important; user-select: none; }
 
+    /* ── Resize-mode edges (desktop context menu → "Resize") ─────────────── */
+    .resize-edge {
+      position: absolute;
+      display: none;
+      z-index: 15;
+      background: var(--md-primary);
+      opacity: .12;
+      border-radius: 4px;
+      transition: opacity .15s;
+    }
+    .widget.resize-mode .resize-edge { display: block; }
+    .resize-edge:hover { opacity: .35; }
+    .resize-edge-top,
+    .resize-edge-bottom { left: 10px; right: 10px; height: 8px; cursor: ns-resize; }
+    .resize-edge-top    { top: 0; }
+    .resize-edge-bottom { bottom: 0; }
+    .resize-edge-left,
+    .resize-edge-right { top: 10px; bottom: 10px; width: 8px; cursor: ew-resize; }
+    .resize-edge-left  { left: 0; }
+    .resize-edge-right { right: 0; }
+
     .widget-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
     .widget-icon {
       width: 40px; height: 40px;
@@ -552,7 +573,8 @@
       position: fixed; top: 64px; right: 12px; z-index: 400;
       box-shadow: 0 6px 20px rgba(0,0,0,.28);
     }
-    .widget.move-mode {
+    .widget.move-mode,
+    .widget.resize-mode {
       outline: 2px solid var(--md-primary); outline-offset: 2px;
       box-shadow: 0 10px 30px rgba(0,0,0,.25);
     }
@@ -1077,8 +1099,8 @@
 <!-- ── Widget context menu (right-click: empty space → Add Widget, widget → Configure/Delete) ── -->
 <ul id="widget-ctx-menu" class="ctx-menu" style="display:none"></ul>
 
-<!-- ── Mobile move-mode "Apply" button (shown while reordering a widget in the stack) ── -->
-<button id="widget-move-apply-btn" class="btn-submit" style="display:none" onclick="applyMoveMode()">
+<!-- ── "Apply" button — shown while a widget is in mobile move mode or desktop resize mode ── -->
+<button id="widget-move-apply-btn" class="btn-submit" style="display:none" onclick="applyPendingWidgetMode()">
   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
   Apply
 </button>
@@ -1826,6 +1848,13 @@ function buildDeviceMeta(dev) {
 // ── Widget creation ────────────────────────────────────────────────────────
 const DRAG_HANDLE_SVG = `<div class="drag-handle"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></div>`;
 const RESIZE_HANDLE_SVG = `<div class="resize-handle" draggable="false"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="4" y1="15" x2="15" y2="4" stroke-width="1.5"/><line x1="8" y1="15" x2="15" y2="8" stroke-width="1.5"/><line x1="12" y1="15" x2="15" y2="12" stroke-width="1.5"/></svg></div>`;
+// Only visible while a widget is in desktop "Resize" mode (see enterDesktopResizeMode) —
+// the corner handle above always works via hover, these give edge-only resizing instead.
+const RESIZE_EDGES_HTML = `
+<div class="resize-edge resize-edge-top"></div>
+<div class="resize-edge resize-edge-right"></div>
+<div class="resize-edge resize-edge-bottom"></div>
+<div class="resize-edge resize-edge-left"></div>`;
 
 function makeWidget(id) {
   const w = document.createElement('div');
@@ -1833,10 +1862,11 @@ function makeWidget(id) {
   w.id         = id;
   w.draggable  = !isMobile();
   w.style.display = 'none';
-  w.innerHTML  = DRAG_HANDLE_SVG + RESIZE_HANDLE_SVG;
+  w.innerHTML  = DRAG_HANDLE_SVG + RESIZE_HANDLE_SVG + RESIZE_EDGES_HTML;
   if (!isMobile()) {
     attachDragListeners(w);
     attachResizeListener(w);
+    attachResizeEdgeListeners(w);
   }
   dom.grid.appendChild(w);
   return w;
@@ -3678,7 +3708,14 @@ function attachLongPress(el, onLongPress) {
 
 function widgetContextMenuItems(widgetId) {
   const items = [{ label: 'Configure', onClick: () => openWidgetConfigDialog(widgetId) }];
-  if (isMobile()) items.push({ label: 'Move', onClick: () => enterMoveMode(widgetId) });
+  if (isMobile()) {
+    items.push({ label: 'Move', onClick: () => enterMoveMode(widgetId) });
+  } else {
+    // The corner handle already resizes on hover — this instead lets you
+    // grab any single edge to resize just that axis, entered explicitly so
+    // the extra hit zones aren't in the way otherwise.
+    items.push({ label: 'Resize', onClick: () => enterDesktopResizeMode(widgetId) });
+  }
   items.push({ label: 'Delete', danger: true, onClick: () => confirmDeleteWidget(widgetId) });
   return items;
 }
@@ -3729,6 +3766,7 @@ function positionMoveApplyBtn() {
 }
 
 function enterMoveMode(widgetId) {
+  if (desktopResizeWidgetId) exitDesktopResizeMode();
   if (moveModeWidgetId && moveModeWidgetId !== widgetId) applyMoveMode();
   moveModeWidgetId = widgetId;
   const wi = widgetInstances[widgetId];
@@ -3748,6 +3786,44 @@ function applyMoveMode() {
   document.getElementById('widget-move-apply-btn').style.display = 'none';
   window.removeEventListener('resize', positionMoveApplyBtn);
   saveLayout();   // re-syncs `widgets` order from current DOM order and persists via WidgetStore
+}
+
+// ── Desktop resize mode ──────────────────────────────────────────────────────
+// Entered via the widget context menu's "Resize" item, exited the same way as
+// mobile's move mode — the fixed Apply button below the app bar (see
+// applyPendingWidgetMode, shared by both since only one is ever reachable on
+// a given device).
+let desktopResizeWidgetId = null;
+
+function enterDesktopResizeMode(widgetId) {
+  if (moveModeWidgetId) applyMoveMode();
+  if (desktopResizeWidgetId && desktopResizeWidgetId !== widgetId) exitDesktopResizeMode();
+  desktopResizeWidgetId = widgetId;
+  const wi = widgetInstances[widgetId];
+  if (!wi) return;
+  wi.el.classList.add('resize-mode');
+  document.getElementById('widget-move-apply-btn').style.display = '';
+  positionMoveApplyBtn();
+  window.addEventListener('resize', positionMoveApplyBtn);
+}
+
+function exitDesktopResizeMode() {
+  if (!desktopResizeWidgetId) return;
+  const wi = widgetInstances[desktopResizeWidgetId];
+  if (wi) wi.el.classList.remove('resize-mode');
+  desktopResizeWidgetId = null;
+  document.getElementById('widget-move-apply-btn').style.display = 'none';
+  window.removeEventListener('resize', positionMoveApplyBtn);
+  saveLayout();
+  redrawAllCharts();
+}
+
+// Shared by the fixed Apply button — only one of these is ever active at a
+// time in practice (Move is mobile-only, Resize is desktop-only), but check
+// both so nothing lingers if that ever changes.
+function applyPendingWidgetMode() {
+  if (moveModeWidgetId) applyMoveMode();
+  if (desktopResizeWidgetId) exitDesktopResizeMode();
 }
 
 // Re-sorts the whole stack while a widget in move mode is being dragged: the
@@ -3868,6 +3944,97 @@ function attachResizeListener(widget) {
     }
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup',   onUp);
+  });
+}
+
+// Edge-only resizing — only reachable via the context menu's "Resize" item
+// (see enterDesktopResizeMode), unlike the always-hoverable corner handle
+// above. Each edge adjusts just its own axis; the left/top edges also shift
+// colStart/rowStart since dragging them moves that side of the widget rather
+// than just extending it.
+// Supports both mouse (desktop) and touch (a touchscreen showing the desktop
+// grid — e.g. a touchscreen laptop, or any device wide enough to skip the
+// mobile portrait stack). Every listener calls stopPropagation() so a press
+// that starts on an edge can never also bubble into the widget's own
+// long-press-to-context-menu listener or the grid's move-mode touch handler
+// — a resize press must win outright, not race either of those.
+function attachResizeEdgeListeners(widget) {
+  const EDGES = [
+    { cls: 'resize-edge-right',  axis: 'col', fromStart: true  },
+    { cls: 'resize-edge-bottom', axis: 'row', fromStart: true  },
+    { cls: 'resize-edge-left',   axis: 'col', fromStart: false },
+    { cls: 'resize-edge-top',    axis: 'row', fromStart: false },
+  ];
+  EDGES.forEach(({ cls, axis, fromStart }) => {
+    const edge = widget.querySelector('.' + cls);
+
+    // Shared drag math for both input types — returns `apply(curX, curY)` to
+    // call on every move and `end()` to call once the press is released.
+    function beginResize(startX, startY) {
+      widget.setAttribute('draggable', 'false');
+      widget.classList.add('is-resizing');
+      const { trackW, trackH } = getTrackSizes();
+      const track = axis === 'col' ? trackW : trackH;
+      const pos   = parseGridPos(widget);
+      const startStart = axis === 'col' ? pos.colStart : pos.rowStart;
+      const startSpan  = axis === 'col' ? pos.colSpan  : pos.rowSpan;
+
+      function apply(curX, curY) {
+        const deltaPx    = axis === 'col' ? (curX - startX) : (curY - startY);
+        const deltaCells = Math.round(deltaPx / currentScale / track);
+        let start = startStart, span = startSpan;
+        if (fromStart) {
+          const max = axis === 'col' ? GRID_COLS - startStart + 1 : Infinity;
+          span = Math.max(2, Math.min(max, startSpan + deltaCells));
+        } else {
+          start = Math.max(1, Math.min(startStart + startSpan - 2, startStart + deltaCells));
+          span  = startStart + startSpan - start;
+        }
+        const colStart = axis === 'col' ? start : pos.colStart;
+        const colSpan  = axis === 'col' ? span  : pos.colSpan;
+        const rowStart = axis === 'row' ? start : pos.rowStart;
+        const rowSpan  = axis === 'row' ? span  : pos.rowSpan;
+        if (!wouldOverlap(widget, colStart, colSpan, rowStart, rowSpan)) {
+          widget.style.gridColumn = `${colStart} / span ${colSpan}`;
+          widget.style.gridRow    = `${rowStart} / span ${rowSpan}`;
+        }
+      }
+      function end() {
+        widget.setAttribute('draggable', 'true');
+        widget.classList.remove('is-resizing');
+        saveLayout();
+        redrawAllCharts();
+      }
+      return { apply, end };
+    }
+
+    edge.addEventListener('mousedown', e => {
+      e.preventDefault(); e.stopPropagation();
+      const { apply, end } = beginResize(e.clientX, e.clientY);
+      function onMove(e) { apply(e.clientX, e.clientY); }
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup',   onUp);
+        end();
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup',   onUp);
+    });
+
+    edge.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1) return;
+      e.preventDefault(); e.stopPropagation();
+      const t = e.touches[0];
+      const { apply, end } = beginResize(t.clientX, t.clientY);
+      function onMove(e) { apply(e.touches[0].clientX, e.touches[0].clientY); }
+      function onEnd() {
+        document.removeEventListener('touchmove', onMove);
+        document.removeEventListener('touchend',  onEnd);
+        end();
+      }
+      document.addEventListener('touchmove', onMove, { passive: false });
+      document.addEventListener('touchend',  onEnd);
+    }, { passive: false });
   });
 }
 
@@ -4248,6 +4415,10 @@ function closeDeleteWidgetDialog() { widgetPendingDelete = null; delWidgetDialog
 function doDeleteWidget() {
   const id = widgetPendingDelete;
   if (id) {
+    // Deleting a widget mid-mode would otherwise leave the Apply button
+    // stuck visible with nothing left for it to apply to.
+    if (moveModeWidgetId === id) applyMoveMode();
+    if (desktopResizeWidgetId === id) exitDesktopResizeMode();
     removeWidgetInstance(id);
     widgets = widgets.filter(w => w.id !== id);
     WidgetStore.save(widgets);
