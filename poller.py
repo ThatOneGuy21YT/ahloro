@@ -14,12 +14,13 @@ Configuration (env vars, or a .env file in the same directory):
   GW_TYPE         dfrobot | ug65  (default: dfrobot)
   GW_HOST         IP of the LoRaWAN gateway (default: 10.8.8.8)
   GW_EMAIL        ChirpStack admin email/username (default: admin)
-  GW_PASS         ChirpStack admin password (plain text)
-  GW_PASS_HASH    MD5-base64 of ChirpStack password — overrides GW_PASS for
-                  ug65 type (where the API requires pre-hashed passwords)
-  GW_STATIC_TOKEN ug65 only: bearer JWT to use when internal/login is
-                  unavailable — capture the "token" cookie from an
-                  authenticated browser session on the UG65 web UI
+  GW_PASS         ChirpStack admin password (plain text). For ug65 this is
+                  the same password as the main web UI login — internal/login
+                  expects it AES-CBC-encrypted (fixed key/iv, matching the
+                  web UI's own CGI login), which poller.py does automatically.
+  GW_STATIC_TOKEN ug65 only, optional fallback: a bearer JWT to use if
+                  internal/login is ever unavailable — capture the "token"
+                  cookie from an authenticated browser session on the web UI
   SIOT_USER       SIOT broker username (dfrobot only, default: siot)
   SIOT_PASS       SIOT broker password (dfrobot only)
   DASHBOARD_URL   Full base URL of the dashboard (required)
@@ -27,7 +28,6 @@ Configuration (env vars, or a .env file in the same directory):
 """
 
 import base64
-import hashlib
 import json
 import os
 import re
@@ -37,6 +37,9 @@ import threading
 import time
 import urllib.error
 import urllib.request
+
+from cryptography.hazmat.primitives import padding as sym_padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 import device_classifier
 
@@ -76,7 +79,6 @@ GW_TYPE          = os.environ.get("GW_TYPE",          "dfrobot")
 GW_HOST          = os.environ.get("GW_HOST",          "10.8.8.8")
 GW_EMAIL         = os.environ.get("GW_EMAIL",         "admin")
 GW_PASS          = os.environ.get("GW_PASS",          "")
-GW_PASS_HASH     = os.environ.get("GW_PASS_HASH",     "")   # MD5-base64, overrides GW_PASS for ug65
 GW_STATIC_TOKEN  = os.environ.get("GW_STATIC_TOKEN",  "")   # ug65 only: bearer JWT fallback when internal/login is unavailable
 
 GW_BASE = f"https://{GW_HOST}/api"
@@ -104,8 +106,16 @@ _gw_ssl.verify_mode    = ssl.CERT_NONE
 # ── Gateway helpers ───────────────────────────────────────────────────────────
 
 
-def _md5_b64(s: str) -> str:
-    return base64.b64encode(hashlib.md5(s.encode()).digest()).decode()
+def _aes_enc(plaintext: str) -> str:
+    """Encrypt with the UG65's fixed AES-CBC key/iv — the same scheme its own
+    web UI uses for both the main CGI login and (per js/login.js's
+    getToken()) the ChirpStack internal/login password. Not a secret key;
+    it's hardcoded in the gateway's own JS."""
+    key, iv = b"1111111111111111", b"2222222222222222"
+    padder  = sym_padding.PKCS7(128).padder()
+    padded  = padder.update(plaintext.encode()) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    return base64.b64encode(encryptor.update(padded) + encryptor.finalize()).decode()
 
 
 def _gw_request(method, path, body=None, token=None):
@@ -194,6 +204,7 @@ def _new_device_state() -> dict:
         "ug65_last_seen_at":   None,   # tracks UG65 lastSeenAt for heartbeat detection
         "ug65_seen_fcnt":      {},     # devAddr -> highest uplink fCnt forwarded (dedup;
                                         # keyed per-session since a rejoin resets fCnt to 0)
+        "ug65_primed":         False,  # True once the initial history baseline is set
         "button_expire_timer": None,
         "stats": {
             "opens": 0, "closes": 0, "holds": 0, "doubles": 0,
@@ -203,21 +214,6 @@ def _new_device_state() -> dict:
         },
         "stats_lock": threading.Lock(),
     }
-
-
-def _ug65_seed_fcnt(dev: dict) -> dict:
-    """Seed ug65_seen_fcnt for the device's *current* session (devAddr) from
-    its current fCntUp, so newly-tracked devices don't replay old history as
-    fresh events on first sight. A future rejoin gets a new devAddr and is
-    intentionally left unseeded — its fCnt starts at 0 and should be treated
-    as new, not compared against a previous session's high-water mark."""
-    dev_addr = dev.get("devAddr")
-    if not dev_addr:
-        return {}
-    try:
-        return {dev_addr: int(dev.get("fCntUp", 0)) - 1}
-    except (TypeError, ValueError):
-        return {}
 
 
 def _get_device_name(eui: str) -> str:
@@ -266,10 +262,12 @@ def _post_devices_update():
 
 def _gw_login() -> str:
     if GW_TYPE == "ug65":
-        # UG65 ChirpStack API expects username + MD5-base64 password
-        pw_hash = GW_PASS_HASH if GW_PASS_HASH else _md5_b64(GW_PASS)
+        # ChirpStack's internal/login on the UG65 expects the password
+        # AES-CBC-encrypted with the gateway's fixed key/iv — the same
+        # encoding its own web UI uses for the main login (see
+        # js/login.js), not a password hash.
         auth = _gw_request("POST", "internal/login",
-                            {"username": GW_EMAIL, "password": pw_hash})
+                            {"username": GW_EMAIL, "password": _aes_enc(GW_PASS)})
     else:
         auth = _gw_request("POST", "internal/login",
                             {"email": GW_EMAIL, "password": GW_PASS})
@@ -758,8 +756,6 @@ def init_devices():
         eui = dev["devEUI"].upper()
         if eui not in _device_states:
             _device_states[eui] = _new_device_state()
-            if GW_TYPE == "ug65":
-                _device_states[eui]["ug65_seen_fcnt"] = _ug65_seed_fcnt(dev)
         if eui not in _device_type_store:
             _classify_and_store(eui, dev.get("name", eui))
 
@@ -799,8 +795,6 @@ def device_status_refresh():
                     # _process_gateway_deletions() already popped its state.
                     if eui in added_euids or eui not in _device_states:
                         _device_states[eui] = _new_device_state()
-                        if GW_TYPE == "ug65":
-                            _device_states[eui]["ug65_seen_fcnt"] = _ug65_seed_fcnt(dev)
                         if eui not in _device_type_store:
                             _classify_and_store(eui, dev.get("name", eui))
                         added.append(eui)
@@ -848,6 +842,13 @@ def device_status_refresh():
 
             _post_devices_update()
 
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401:
+                # Cached token went bad (e.g. the gateway rebooted and reset
+                # its session) — force a fresh login attempt next cycle.
+                global _cached_token
+                _cached_token = None
+            print(f"device_status_refresh error: {exc}", file=sys.stderr)
         except Exception as exc:
             print(f"device_status_refresh error: {exc}", file=sys.stderr)
 
@@ -907,6 +908,7 @@ def _ug65_packets_poll_once():
         return
 
     now = time.time()
+    _ug65_prime_new_devices(packets)
     # The endpoint returns newest-first; walk oldest-first so fCnt dedup
     # advances in order.
     for pkt in reversed(packets):
@@ -914,6 +916,35 @@ def _ug65_packets_poll_once():
             _ug65_handle_packet(pkt, now)
         except Exception as exc:
             print(f"UG65 packets: failed to process packet ({exc}): {pkt}", file=sys.stderr)
+
+
+def _ug65_prime_new_devices(packets: list):
+    """The first time we see any packets for a given device in this process's
+    lifetime, treat everything currently in the fetch window as history and
+    mark it all "already seen" instead of forwarding it — the window can
+    span several old join sessions (devAddrs) from earlier testing/rejoins,
+    and only priming the device's *current* devAddr would let all those
+    other old sessions replay as fresh events."""
+    by_eui: dict[str, list] = {}
+    for pkt in packets:
+        eui = (pkt.get("devEUI") or "").upper()
+        by_eui.setdefault(eui, []).append(pkt)
+
+    for eui, pkts in by_eui.items():
+        ds = _device_states.get(eui)
+        if ds is None or ds.get("ug65_primed"):
+            continue
+        seen = ds["ug65_seen_fcnt"]
+        for pkt in pkts:
+            if not str(pkt.get("type", "")).startswith("Up"):
+                continue
+            dev_addr = pkt.get("devAddr") or ""
+            try:
+                fcnt = int(pkt.get("fCnt"))
+            except (TypeError, ValueError):
+                continue
+            seen[dev_addr] = max(seen.get(dev_addr, -1), fcnt)
+        ds["ug65_primed"] = True
 
 
 def _ug65_handle_packet(pkt: dict, now: float):
