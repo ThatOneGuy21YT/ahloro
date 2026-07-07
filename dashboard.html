@@ -547,6 +547,16 @@
     .ctx-menu li:hover { background: var(--md-surf-high); }
     .ctx-menu li.danger { color: var(--md-error); }
 
+    /* ── Mobile move mode ────────────────────────────────────────────────── */
+    #widget-move-apply-btn {
+      position: fixed; top: 64px; right: 12px; z-index: 400;
+      box-shadow: 0 6px 20px rgba(0,0,0,.28);
+    }
+    .widget.move-mode {
+      outline: 2px solid var(--md-primary); outline-offset: 2px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    }
+
     /* ── Last-update / raw-value widget bodies ───────────────────────────── */
     .last-update-body, .raw-value-body {
       display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -643,9 +653,14 @@
 
     /* ── No devices placeholder ──────────────────────────────────────────── */
     #no-device-msg {
+      /* Fixed, not just a plain block — it's now a child of #grid so it can
+         bubble touch events to the grid's long-press listener, but as a
+         grid item it would otherwise get auto-placed into a single 60x60
+         cell instead of centering over the viewport like before. */
+      position: fixed; inset: 64px 0 0 0; z-index: 10;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
-      height: calc(100vh - 64px);
       gap: 16px; color: var(--md-outline); font-size: 16px;
+      pointer-events: none;
     }
     #no-device-msg svg { opacity: .3; }
 
@@ -661,7 +676,6 @@
         gap: 6px;
         padding: 6px 12px;
       }
-
 
       /* Icon-only circular buttons */
       .btn-label { display: none; }
@@ -708,6 +722,13 @@
         overflow-x: hidden !important;
         padding: 12px;
         gap: 12px;
+        -webkit-touch-callout: none;
+        user-select: none;
+        /* Without real widgets, flex content collapses to ~0 height (no
+           phantom-sizing trick here like the desktop grid's syncGridRows) —
+           give it a real touchable surface so long-press works even when
+           the canvas is empty. */
+        min-height: calc(100vh - 56px);
       }
 
       /* Override inline grid-column / grid-row from JS */
@@ -718,9 +739,31 @@
         height: auto !important;
         min-height: 260px;
         cursor: default;
+        /* Long-press opens our own context menu — suppress the native
+           text-selection callout/highlight that would otherwise compete with it. */
+        -webkit-touch-callout: none;
+        user-select: none;
       }
       .widget:active { cursor: default; }
       .widget.dragging { transform: none; opacity: 1; }
+
+      /* Larger type across widget content — small screen, no reason to keep
+         desktop's tighter sizing. */
+      .widget-title      { font-size: 19px; }
+      .widget-subtitle   { font-size: 14px; }
+      .status-text       { font-size: 52px; }
+      .status-since      { font-size: 16px; }
+      .stat-val          { font-size: 38px; }
+      .stat-lbl          { font-size: 13px; }
+      .last-update-value { font-size: 46px; }
+      .last-update-lbl   { font-size: 15px; }
+      .analog-value      { font-size: 72px; }
+      .analog-unit       { font-size: 28px; }
+      .gyro-val          { font-size: 54px; }
+      .gyro-axis-label   { font-size: 15px; }
+      .log-state         { font-size: 16px; }
+      .log-time          { font-size: 14px; }
+      .log-raw           { font-size: 13px; }
 
       /* Chart canvas needs explicit height since parent is now auto */
       [id^="w-chart-"] { min-height: 300px; }
@@ -1018,17 +1061,28 @@
 <!-- ── Widget grid ── -->
 <div class="grid" id="grid">
   <div id="drop-ghost"></div>
+
+  <!-- ── Empty-canvas hint (shown when there are no widgets yet) ── -->
+  <!-- Lives inside #grid, not as a sibling, so it's a bubbling target for
+       the long-press listener attached to #grid and inherits the
+       touch-callout/user-select suppression — otherwise a long-press here
+       falls through to the native text-selection UI instead of our menu. -->
+  <div id="no-device-msg" style="display:none">
+    <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/></svg>
+    <span>Right-click anywhere on the canvas to add a widget</span>
+  </div>
+</div>
 </div>
 
 <!-- ── Widget context menu (right-click: empty space → Add Widget, widget → Configure/Delete) ── -->
 <ul id="widget-ctx-menu" class="ctx-menu" style="display:none"></ul>
 
-<!-- ── Empty-canvas hint (shown when there are no widgets yet) ── -->
-<div id="no-device-msg" style="display:none">
-  <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/></svg>
-  <span>Right-click anywhere on the canvas to add a widget</span>
-</div>
-</div>
+<!-- ── Mobile move-mode "Apply" button (shown while reordering a widget in the stack) ── -->
+<button id="widget-move-apply-btn" class="btn-submit" style="display:none" onclick="applyMoveMode()">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+  Apply
+</button>
+
 
 <!-- ── Table Viewer page ── -->
 <div id="page-table" style="display:none">
@@ -3536,14 +3590,15 @@ function cellFromMouse(e) {
   };
 }
 
-function parseGridPos(widget) {
-  const cm = (widget.style.gridColumn || '').match(/(\d+)\s*\/\s*span\s+(\d+)/);
-  const rm = (widget.style.gridRow    || '').match(/(\d+)\s*\/\s*span\s+(\d+)/);
+function parseGridPosStr(colStr, rowStr) {
+  const cm = (colStr || '').match(/(\d+)\s*\/\s*span\s+(\d+)/);
+  const rm = (rowStr || '').match(/(\d+)\s*\/\s*span\s+(\d+)/);
   return {
     colStart: cm ? parseInt(cm[1]) : 1, colSpan: cm ? parseInt(cm[2]) : 8,
     rowStart: rm ? parseInt(rm[1]) : 1, rowSpan: rm ? parseInt(rm[2]) : 8,
   };
 }
+function parseGridPos(widget) { return parseGridPosStr(widget.style.gridColumn, widget.style.gridRow); }
 
 // Standard AABB overlap test for two grid-placed rectangles.
 function overlaps(aCs, aCsp, aRs, aRsp, bCs, bCsp, bRs, bRsp) {
@@ -3590,15 +3645,51 @@ document.addEventListener('click', hideContextMenu);
 document.addEventListener('scroll', hideContextMenu, true);
 window.addEventListener('blur', hideContextMenu);
 
+// ── Long-press (touch equivalent of right-click) ────────────────────────────
+// Fires `onLongPress(x, y, e)` after a ~500ms hold that doesn't move more than
+// a few px (so it doesn't fight normal scrolling/dragging). Suppresses the
+// synthetic `click` event touchend would otherwise fire afterward — without
+// that, `document`'s click-to-close listener would immediately hide the menu
+// this just opened.
+function attachLongPress(el, onLongPress) {
+  let timer = null, startX = 0, startY = 0, fired = false;
+  const MOVE_TOLERANCE = 10, HOLD_MS = 500;
+  el.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) { clearTimeout(timer); timer = null; return; }
+    const t = e.touches[0];
+    startX = t.clientX; startY = t.clientY; fired = false;
+    timer = setTimeout(() => {
+      timer = null; fired = true;
+      onLongPress(startX, startY, e);
+    }, HOLD_MS);
+  }, { passive: true });
+  el.addEventListener('touchmove', e => {
+    if (!timer) return;
+    const t = e.touches[0];
+    if (Math.hypot(t.clientX - startX, t.clientY - startY) > MOVE_TOLERANCE) {
+      clearTimeout(timer); timer = null;
+    }
+  }, { passive: true });
+  el.addEventListener('touchend', e => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    else if (fired) { e.preventDefault(); fired = false; }
+  }, { passive: false });
+}
+
+function widgetContextMenuItems(widgetId) {
+  const items = [{ label: 'Configure', onClick: () => openWidgetConfigDialog(widgetId) }];
+  if (isMobile()) items.push({ label: 'Move', onClick: () => enterMoveMode(widgetId) });
+  items.push({ label: 'Delete', danger: true, onClick: () => confirmDeleteWidget(widgetId) });
+  return items;
+}
+
 function attachWidgetContextMenu(el, widgetId) {
   el.addEventListener('contextmenu', e => {
     e.preventDefault();
     e.stopPropagation();
-    showContextMenu(e.clientX, e.clientY, [
-      { label: 'Configure', onClick: () => openWidgetConfigDialog(widgetId) },
-      { label: 'Delete', danger: true, onClick: () => confirmDeleteWidget(widgetId) },
-    ]);
+    showContextMenu(e.clientX, e.clientY, widgetContextMenuItems(widgetId));
   });
+  attachLongPress(el, (x, y) => showContextMenu(x, y, widgetContextMenuItems(widgetId)));
 }
 
 dom.grid.addEventListener('contextmenu', e => {
@@ -3609,6 +3700,86 @@ dom.grid.addEventListener('contextmenu', e => {
     { label: 'Add Widget', onClick: () => openWidgetConfigDialog(null, { col, row }) },
   ]);
 });
+
+attachLongPress(dom.grid, (x, y, e) => {
+  if (e.target.closest('.widget')) return;   // handled by attachWidgetContextMenu instead
+  const { col, row } = isMobile() ? { col: 1, row: 1 } : cellFromMouse({ clientX: x, clientY: y });
+  showContextMenu(x, y, [
+    { label: 'Add Widget', onClick: () => openWidgetConfigDialog(null, { col, row }) },
+  ]);
+});
+
+
+// ── Mobile move mode ─────────────────────────────────────────────────────────
+// On mobile the grid is a plain vertical stack (see the mobile media query),
+// so "moving" a widget means reordering it among its siblings, not free 2D
+// placement. Entered via the widget context menu's "Move" item, exited by
+// tapping the fixed Apply button — touchend alone does NOT finalize, so the
+// user can drag, let go, look, and drag again before committing.
+let moveModeWidgetId = null;
+let _moveTouchActive = false;
+
+// The app bar can wrap to a second row on narrow screens (flex-wrap), so its
+// real rendered height varies — position the Apply button from its actual
+// bottom edge rather than a fixed guess, or it can end up overlapping a
+// wrapped second row.
+function positionMoveApplyBtn() {
+  const barRect = dom.appBar.getBoundingClientRect();
+  document.getElementById('widget-move-apply-btn').style.top = (barRect.bottom + 8) + 'px';
+}
+
+function enterMoveMode(widgetId) {
+  if (moveModeWidgetId && moveModeWidgetId !== widgetId) applyMoveMode();
+  moveModeWidgetId = widgetId;
+  const wi = widgetInstances[widgetId];
+  if (!wi) return;
+  wi.el.classList.add('move-mode');
+  document.getElementById('widget-move-apply-btn').style.display = '';
+  positionMoveApplyBtn();
+  window.addEventListener('resize', positionMoveApplyBtn);
+}
+
+function applyMoveMode() {
+  if (!moveModeWidgetId) return;
+  const wi = widgetInstances[moveModeWidgetId];
+  if (wi) wi.el.classList.remove('move-mode');
+  moveModeWidgetId = null;
+  _moveTouchActive = false;
+  document.getElementById('widget-move-apply-btn').style.display = 'none';
+  window.removeEventListener('resize', positionMoveApplyBtn);
+  saveLayout();   // re-syncs `widgets` order from current DOM order and persists via WidgetStore
+}
+
+// Re-sorts the whole stack while a widget in move mode is being dragged: the
+// dragged widget is placed just before the first sibling whose vertical
+// midpoint the touch point has passed, so the reorder feels continuous.
+function reorderMoveModeWidget(touchY) {
+  const wi = moveModeWidgetId && widgetInstances[moveModeWidgetId];
+  if (!wi) return;
+  const siblings = Array.from(dom.grid.querySelectorAll('.widget')).filter(w => w !== wi.el);
+  let insertBeforeEl = null;
+  for (const sib of siblings) {
+    const rect = sib.getBoundingClientRect();
+    if (touchY < rect.top + rect.height / 2) { insertBeforeEl = sib; break; }
+  }
+  if (insertBeforeEl) dom.grid.insertBefore(wi.el, insertBeforeEl);
+  else dom.grid.appendChild(wi.el);
+}
+
+dom.grid.addEventListener('touchstart', () => {
+  // Deliberately not restricted to touching the widget itself — the touch
+  // point is just a positional indicator for where the widget should land,
+  // so the finger is free to stay clear of the widget while moving it.
+  if (moveModeWidgetId) _moveTouchActive = true;
+}, { passive: true });
+
+dom.grid.addEventListener('touchmove', e => {
+  if (!moveModeWidgetId || !_moveTouchActive) return;
+  e.preventDefault();   // this drag IS the intended action — don't also scroll the page
+  reorderMoveModeWidget(e.touches[0].clientY);
+}, { passive: false });
+
+dom.grid.addEventListener('touchend', () => { _moveTouchActive = false; });
 
 // ── Drop ghost ─────────────────────────────────────────────────────────────
 const ghost = document.getElementById('drop-ghost');
@@ -3705,12 +3876,17 @@ function attachResizeListener(widget) {
 // WidgetStore (server-side per Google account, or localStorage as a
 // fallback) — see the drag/resize handlers below for where this is called.
 function saveLayout() {
+  const domOrder = Array.from(document.querySelectorAll('.widget')).map(el => el.dataset.widgetId);
   document.querySelectorAll('.widget').forEach(el => {
     const id = el.dataset.widgetId;
     if (!id) return;
     const def = widgets.find(w => w.id === id);
     if (def) { def.col = el.style.gridColumn; def.row = el.style.gridRow; }
   });
+  // Desktop positions come from col/row above and don't care about array
+  // order, but the mobile stack renders in array order — keep it in sync
+  // with the DOM (harmless on desktop, required for mobile drag-to-reorder).
+  widgets.sort((a, b) => domOrder.indexOf(a.id) - domOrder.indexOf(b.id));
   WidgetStore.save(widgets);
 }
 
