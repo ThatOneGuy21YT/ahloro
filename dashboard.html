@@ -396,7 +396,7 @@
     #drop-ghost {
       display: none;
       background: color-mix(in srgb, var(--md-primary) 12%, transparent);
-      border: 2px dashed var(--md-primary);
+      border: 2px solid var(--md-primary);
       border-radius: var(--radius-xl);
       pointer-events: none;
       z-index: 50;
@@ -506,6 +506,8 @@
     #tilt-config-dialog, #temp-config-dialog,
     #button-config-dialog                        { width: 400px; }
     #button-expire-dialog, #delete-device-dialog { width: 340px; }
+    #widget-config-dialog                        { width: 400px; }
+    #delete-widget-dialog                        { width: 340px; }
     .dialog-inner { padding: 28px; }
     .dialog-title { font-size: 20px; font-weight: 500; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; }
     .dialog-close { background: none; border: none; cursor: pointer; color: var(--md-on-surface-variant); border-radius: 50%; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; transition: background .15s; }
@@ -530,6 +532,28 @@
     .dialog-msg.error   { background: var(--md-error-container); color: var(--md-on-error-container); display: block; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: spin .6s linear infinite; flex-shrink: 0; }
+
+    /* ── Widget context menu ─────────────────────────────────────────────── */
+    .ctx-menu {
+      position: fixed; z-index: 500; margin: 0; padding: 6px; list-style: none;
+      background: var(--md-surface); border: 1px solid var(--md-outline-variant);
+      border-radius: var(--radius-s); box-shadow: 0 8px 28px rgba(0,0,0,.3);
+      min-width: 160px;
+    }
+    .ctx-menu li {
+      padding: 9px 14px; font-size: 13.5px; font-weight: 500; border-radius: 8px;
+      cursor: pointer; color: var(--md-on-surface); white-space: nowrap;
+    }
+    .ctx-menu li:hover { background: var(--md-surf-high); }
+    .ctx-menu li.danger { color: var(--md-error); }
+
+    /* ── Last-update / raw-value widget bodies ───────────────────────────── */
+    .last-update-body, .raw-value-body {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      height: calc(100% - 60px); gap: 4px;
+    }
+    .last-update-value { font-size: 34px; font-weight: 600; color: var(--md-primary); }
+    .last-update-lbl   { font-size: 13px; color: var(--md-on-surface-variant); text-transform: uppercase; letter-spacing: .5px; }
 
     /* ── Tilt config button (app bar) ────────────────────────────────────── */
     .tilt-cfg-btn {
@@ -996,10 +1020,13 @@
   <div id="drop-ghost"></div>
 </div>
 
-<!-- ── No-device placeholder (shown before first device selected) ── -->
+<!-- ── Widget context menu (right-click: empty space → Add Widget, widget → Configure/Delete) ── -->
+<ul id="widget-ctx-menu" class="ctx-menu" style="display:none"></ul>
+
+<!-- ── Empty-canvas hint (shown when there are no widgets yet) ── -->
 <div id="no-device-msg" style="display:none">
   <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/></svg>
-  <span>Select a device from the Devices menu</span>
+  <span>Right-click anywhere on the canvas to add a widget</span>
 </div>
 </div>
 
@@ -1114,6 +1141,63 @@
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
         Add Device
       </button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ── Configure Widget dialog ── -->
+<dialog id="widget-config-dialog">
+  <div class="dialog-inner">
+    <div class="dialog-title">
+      <span id="wcfg-title">Add Widget</span>
+      <button class="dialog-close" onclick="closeWidgetConfigDialog()" title="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    </div>
+    <div class="field-group">
+      <div class="field">
+        <label>Widget Name</label>
+        <input id="wcfg-name" type="text" placeholder="e.g. Front Door">
+      </div>
+      <div class="field">
+        <label>Widget Type <span class="required">*</span></label>
+        <select id="wcfg-kind">
+          <option value="status">Status</option>
+          <option value="last_update">Last Update</option>
+          <option value="event_counts">Event Counts</option>
+          <option value="raw_value">Raw Value</option>
+          <option value="chart">Chart</option>
+          <option value="log">Event Log</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Device</label>
+        <select id="wcfg-device">
+          <option value="">— no device —</option>
+        </select>
+      </div>
+    </div>
+    <div id="wcfg-msg" class="dialog-msg"></div>
+    <div class="dialog-actions">
+      <button class="btn-cancel" id="wcfg-delete-btn" style="border-color:var(--md-error);color:var(--md-error);display:none" onclick="confirmDeleteWidget(currentWidgetConfigId)">Delete</button>
+      <span style="flex:1"></span>
+      <button class="btn-cancel" onclick="closeWidgetConfigDialog()">Cancel</button>
+      <button class="btn-submit" id="wcfg-save-btn" onclick="submitWidgetConfig()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+        Save
+      </button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ── Delete Widget confirmation dialog ── -->
+<dialog id="delete-widget-dialog">
+  <div class="dialog-inner">
+    <div class="dialog-title">Delete Widget</div>
+    <p id="delete-widget-prompt" style="font-size:14px;color:var(--md-on-surface-variant);line-height:1.5;">Delete this widget?</p>
+    <div class="dialog-actions">
+      <button class="btn-cancel" onclick="closeDeleteWidgetDialog()">Cancel</button>
+      <button class="btn-danger" onclick="doDeleteWidget()">Yes, Delete</button>
     </div>
   </div>
 </dialog>
@@ -1459,7 +1543,7 @@
 //
 // Device state:  deviceStates[devEUI] = { lastVal, lastChangeAt, sessionStart,
 //                  opens, closes, chartPts, log }
-// Widget DOM:    deviceWidgets[devEUI] = { status, stats, chart, log DOM nodes }
+// Widget DOM:    widgetInstances[widgetId] = { kind, devEUI, el, refs }
 // Selected EUI:  selectedEUI (string | null)
 // =============================================================================
 
@@ -1501,14 +1585,67 @@ const dom = {
 
 // ── Per-device application state ───────────────────────────────────────────
 const deviceStates  = {};   // devEUI → state object
-const deviceWidgets = {};   // devEUI → widget DOM refs
 const deviceMeta    = {};   // devEUI → {name, online, battery, labelActive, labelInactive,
                             //           deviceType, isAnalog}
+
+// ── Custom widgets ─────────────────────────────────────────────────────────
+// Each widget is user-created (right-click → Add Widget) and bound to one
+// device via its own dropdown, independent of any "selected" device. Layout
+// (col/row) and binding (kind/devEUI/title) persist through WidgetStore.
+//   widgets          : [{id, kind, title, devEUI, col, row}, ...]  (source of truth)
+//   widgetInstances  : widgetId -> {kind, devEUI, el, refs}         (live DOM)
+//   widgetsByDevice  : devEUI -> [widgetId, ...]                    (fan-out index for SSE updates)
+let widgets = [];
+const widgetInstances = {};
+const widgetsByDevice = {};
+let widgetsReady = false, devicesReady = false;
 
 let selectedEUI    = null;
 let currentScale   = 1;
 let GRID_COLS      = 24;
 const BASE_CELL    = 60;
+
+const WIDGET_KINDS = {
+  status:       { label: 'Status',        icon: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z' },
+  last_update:  { label: 'Last Update',   icon: 'M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm0-18a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm.5 5H11v6l4.7 2.8.8-1.3-3.9-2.4V7z' },
+  event_counts: { label: 'Event Counts',  icon: 'M5 9.2h3V19H5zM10.6 5h2.8v14h-2.8zm5.6 8H19v6h-2.8z' },
+  raw_value:    { label: 'Raw Value',     icon: 'M7 15h2.5v2H7v3H5v-3H2.5v-2H5v-3h2v3zm14-1.5V15h-6v-1.5h6zM21 9v1.5h-9V9h9zM7 4h2v6.5H7V8.5H4.5v-2H7V4z' },
+  chart:        { label: 'Chart',         icon: 'M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z' },
+  log:          { label: 'Event Log',     icon: 'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z' },
+};
+function widgetKindMeta(kind) { return WIDGET_KINDS[kind] || WIDGET_KINDS.status; }
+
+// ── Widget persistence ─────────────────────────────────────────────────────
+// GET /widgets tells us on first load whether the server can store a
+// per-account layout (Google OAuth logged in) or not — if not, we fall back
+// to localStorage entirely, same as the old per-device layout used to.
+const WIDGETS_LOCAL_KEY = 'lora-custom-widgets';
+const WidgetStore = {
+  serverSide: false,
+  async load() {
+    try {
+      const res  = await fetch('/widgets');
+      const data = await res.json();
+      this.serverSide = !!data.serverSide;
+      if (this.serverSide) return data.widgets || [];
+    } catch (_) { /* fall through to localStorage */ }
+    try { return JSON.parse(localStorage.getItem(WIDGETS_LOCAL_KEY) || '[]'); }
+    catch (_) { return []; }
+  },
+  async save(list) {
+    if (this.serverSide) {
+      try {
+        await fetch('/set_widgets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ widgets: list }),
+        });
+        return;
+      } catch (_) { /* fall through to localStorage as a safety net */ }
+    }
+    localStorage.setItem(WIDGETS_LOCAL_KEY, JSON.stringify(list));
+  },
+};
 
 // ── Device state factory ───────────────────────────────────────────────────
 function newDeviceState(serverStats) {
@@ -1516,6 +1653,7 @@ function newDeviceState(serverStats) {
     // Binary fields
     lastVal:      null,
     lastChangeAt: serverStats?.last_change_ts ? serverStats.last_change_ts * 1000 : null,
+    lastEventAt:  serverStats?.last_change_ts ? serverStats.last_change_ts * 1000 : null,   // any event, not just state changes — drives the "last update" widget
     sessionStart: serverStats?.server_start   ? serverStats.server_start   * 1000 : Date.now(),
     opens:        serverStats?.opens   ?? 0,
     closes:       serverStats?.closes  ?? 0,
@@ -1650,279 +1788,266 @@ function makeWidget(id) {
   return w;
 }
 
-function createDeviceWidgets(dev) {
-  const eui    = dev.devEUI.toUpperCase();
-  const name   = dev.name;
-  const suffix = eui.slice(-8);
-  const la     = dev.label_active   || 'ACTIVE';
-  const li     = dev.label_inactive || 'INACTIVE';
-  const dtype  = dev.device_type || 'generic';
-  const prof   = typeProfile(dtype);
-
-  // ── Status widget ─────────────────────────────────────────────────────────
-  const wStatus = makeWidget(`w-status-${suffix}`);
-  wStatus.insertAdjacentHTML('beforeend', `
-    <div class="widget-header">
-      <div class="widget-icon" id="whi-${suffix}">${iconSVG(prof.icon)}</div>
-      <div>
-        <div class="widget-title">${escHtml(name)}</div>
-        <div class="widget-subtitle">${escHtml(eui)}</div>
+// ── Custom widget rendering ────────────────────────────────────────────────
+// One widget = one DOM element, one `kind`, bound to zero-or-one device via
+// widgetsByDevice. Unlike the old per-device 4-widget bundle, any number of
+// widgets (including several of the same kind) can point at the same device,
+// or none at all (unconfigured, until the user picks one via Configure).
+function widgetBodyHTML(kind, suffix) {
+  switch (kind) {
+    case 'status': return `
+      <div class="status-body">
+        <div class="status-ring idle" id="sr-${suffix}">
+          <div class="status-icon-svg" id="sic-${suffix}"></div>
+        </div>
+        <div class="status-text idle" id="st-${suffix}">—</div>
+        <div class="analog-display" id="andsp-${suffix}" style="display:none">
+          <div class="analog-value-row">
+            <div class="analog-value" id="anv-${suffix}">—</div>
+            <div class="analog-unit"  id="anu-${suffix}"></div>
+          </div>
+          <div class="analog-extra-row" id="anex-${suffix}"></div>
+        </div>
+        <div class="gyro-display" id="gydsp-${suffix}" style="display:none">
+          <div class="gyro-row">
+            <span class="gyro-axis-label gyro-axis-x">X</span>
+            <span class="gyro-val gyro-val-x" id="gyx-${suffix}">—</span>
+            <span class="gyro-unit">°</span>
+          </div>
+          <div class="gyro-row">
+            <span class="gyro-axis-label gyro-axis-y">Y</span>
+            <span class="gyro-val gyro-val-y" id="gyy-${suffix}">—</span>
+            <span class="gyro-unit">°</span>
+          </div>
+          <div class="gyro-row">
+            <span class="gyro-axis-label gyro-axis-z">Z</span>
+            <span class="gyro-val gyro-val-z" id="gyz-${suffix}">—</span>
+            <span class="gyro-unit">°</span>
+          </div>
+        </div>
+        <div class="status-since" id="ss-${suffix}">Waiting for data…</div>
+      </div>`;
+    case 'event_counts': return `
+      <div class="stats-grid" id="sgb-${suffix}">
+        <div class="stat-tile accent-open">
+          <div class="stat-val" id="so-${suffix}">0</div>
+          <div class="stat-lbl" id="solbl-${suffix}">Opens</div>
+        </div>
+        <div class="stat-tile accent-closed" id="scTile-${suffix}">
+          <div class="stat-val" id="sc-${suffix}">0</div>
+          <div class="stat-lbl" id="sclbl-${suffix}">Closes</div>
+        </div>
+        <div class="stat-tile btn-stat" id="sh-${suffix}" style="display:none">
+          <div class="stat-val" id="sholds-${suffix}">0</div>
+          <div class="stat-lbl">Holds</div>
+        </div>
+        <div class="stat-tile btn-stat" id="sd-${suffix}" style="display:none">
+          <div class="stat-val" id="sdoubles-${suffix}">0</div>
+          <div class="stat-lbl">Doubles</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-val" id="srate-${suffix}">—</div>
+          <div class="stat-lbl">Events / min</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-val" id="sdur-${suffix}">—</div>
+          <div class="stat-lbl">State age</div>
+        </div>
       </div>
-    </div>
-    <div class="status-body">
-      <div class="status-ring idle" id="sr-${suffix}">
-        <div class="status-icon-svg" id="sic-${suffix}">${iconSVG(prof.icon, 72)}</div>
+      <div class="stats-grid" id="sga-${suffix}" style="display:none">
+        <div class="stat-tile">
+          <div class="stat-val" id="scurr-${suffix}">—</div>
+          <div class="stat-lbl">Current</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-val" id="smin-${suffix}">—</div>
+          <div class="stat-lbl">Minimum</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-val" id="smax-${suffix}">—</div>
+          <div class="stat-lbl">Maximum</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-val" id="savg-${suffix}">—</div>
+          <div class="stat-lbl">Average</div>
+        </div>
       </div>
-      <div class="status-text idle" id="st-${suffix}">—</div>
-      <div class="analog-display" id="andsp-${suffix}" style="display:none">
+      <div class="stats-grid" id="sgg-${suffix}" style="display:none">
+        <div class="stat-tile" style="border-left:3px solid #c0392b">
+          <div class="stat-val" id="sgx-${suffix}">—</div>
+          <div class="stat-lbl">X Axis °</div>
+        </div>
+        <div class="stat-tile" style="border-left:3px solid #2471a3">
+          <div class="stat-val" id="sgy-${suffix}">—</div>
+          <div class="stat-lbl">Y Axis °</div>
+        </div>
+        <div class="stat-tile" style="border-left:3px solid #1e8449">
+          <div class="stat-val" id="sgz-${suffix}">—</div>
+          <div class="stat-lbl">Z Axis °</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-val" id="sghoriz-${suffix}">—</div>
+          <div class="stat-lbl">Horizontal °</div>
+        </div>
+      </div>`;
+    case 'chart': return `
+      <div class="chart-wrap">
+        <canvas class="chart-canvas" id="cc-${suffix}"></canvas>
+        <div class="chart-legend" id="cleg-${suffix}"></div>
+      </div>`;
+    case 'log': return `
+      <div class="log-wrap" id="lw-${suffix}">
+        <div class="log-empty" id="le-${suffix}">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+          <span>Waiting for events…</span>
+        </div>
+      </div>`;
+    case 'last_update': return `
+      <div class="last-update-body">
+        <div class="last-update-value" id="luv-${suffix}">—</div>
+        <div class="last-update-lbl">ago</div>
+      </div>`;
+    case 'raw_value': return `
+      <div class="raw-value-body">
         <div class="analog-value-row">
-          <div class="analog-value" id="anv-${suffix}">—</div>
-          <div class="analog-unit"  id="anu-${suffix}"></div>
+          <div class="analog-value" id="rvv-${suffix}">—</div>
+          <div class="analog-unit"  id="rvu-${suffix}"></div>
         </div>
-        <div class="analog-extra-row" id="anex-${suffix}"></div>
-      </div>
-      <div class="gyro-display" id="gydsp-${suffix}" style="display:none">
-        <div class="gyro-row">
-          <span class="gyro-axis-label gyro-axis-x">X</span>
-          <span class="gyro-val gyro-val-x" id="gyx-${suffix}">—</span>
-          <span class="gyro-unit">°</span>
-        </div>
-        <div class="gyro-row">
-          <span class="gyro-axis-label gyro-axis-y">Y</span>
-          <span class="gyro-val gyro-val-y" id="gyy-${suffix}">—</span>
-          <span class="gyro-unit">°</span>
-        </div>
-        <div class="gyro-row">
-          <span class="gyro-axis-label gyro-axis-z">Z</span>
-          <span class="gyro-val gyro-val-z" id="gyz-${suffix}">—</span>
-          <span class="gyro-unit">°</span>
-        </div>
-      </div>
-      <div class="status-since" id="ss-${suffix}">Waiting for data…</div>
-    </div>`);
+      </div>`;
+    default: return '';
+  }
+}
 
-  // ── Stats widget ──────────────────────────────────────────────────────────
-  const wStats = makeWidget(`w-stats-${suffix}`);
-  const lbl0 = la === 'OPEN' ? 'Opens' : la === 'ACTIVE' ? 'Triggers' : la + 's';
-  const lbl1 = li === 'CLOSED' ? 'Closes' : li === 'INACTIVE' ? 'Clears' : li + 's';
-  wStats.insertAdjacentHTML('beforeend', `
-    <div class="widget-header">
-      <div class="widget-icon">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M5 9.2h3V19H5zM10.6 5h2.8v14h-2.8zm5.6 8H19v6h-2.8z"/></svg>
-      </div>
-      <div>
-        <div class="widget-title">Statistics</div>
-        <div class="widget-subtitle">${escHtml(name)}</div>
-      </div>
-    </div>
-    <div class="stats-grid" id="sgb-${suffix}">
-      <div class="stat-tile accent-open">
-        <div class="stat-val" id="so-${suffix}">0</div>
-        <div class="stat-lbl">${escHtml(lbl0)}</div>
-      </div>
-      <div class="stat-tile accent-closed">
-        <div class="stat-val" id="sc-${suffix}">0</div>
-        <div class="stat-lbl">${escHtml(lbl1)}</div>
-      </div>
-      <div class="stat-tile btn-stat" id="sh-${suffix}" style="display:none">
-        <div class="stat-val" id="sholds-${suffix}">0</div>
-        <div class="stat-lbl">Holds</div>
-      </div>
-      <div class="stat-tile btn-stat" id="sd-${suffix}" style="display:none">
-        <div class="stat-val" id="sdoubles-${suffix}">0</div>
-        <div class="stat-lbl">Doubles</div>
-      </div>
-      <div class="stat-tile">
-        <div class="stat-val" id="srate-${suffix}">—</div>
-        <div class="stat-lbl">Events / min</div>
-      </div>
-      <div class="stat-tile">
-        <div class="stat-val" id="sdur-${suffix}">—</div>
-        <div class="stat-lbl">State age</div>
-      </div>
-    </div>
-    <div class="stats-grid" id="sga-${suffix}" style="display:none">
-      <div class="stat-tile">
-        <div class="stat-val" id="scurr-${suffix}">—</div>
-        <div class="stat-lbl">Current</div>
-      </div>
-      <div class="stat-tile">
-        <div class="stat-val" id="smin-${suffix}">—</div>
-        <div class="stat-lbl">Minimum</div>
-      </div>
-      <div class="stat-tile">
-        <div class="stat-val" id="smax-${suffix}">—</div>
-        <div class="stat-lbl">Maximum</div>
-      </div>
-      <div class="stat-tile">
-        <div class="stat-val" id="savg-${suffix}">—</div>
-        <div class="stat-lbl">Average</div>
-      </div>
-    </div>
-    <div class="stats-grid" id="sgg-${suffix}" style="display:none">
-      <div class="stat-tile" style="border-left:3px solid #c0392b">
-        <div class="stat-val" id="sgx-${suffix}">—</div>
-        <div class="stat-lbl">X Axis °</div>
-      </div>
-      <div class="stat-tile" style="border-left:3px solid #2471a3">
-        <div class="stat-val" id="sgy-${suffix}">—</div>
-        <div class="stat-lbl">Y Axis °</div>
-      </div>
-      <div class="stat-tile" style="border-left:3px solid #1e8449">
-        <div class="stat-val" id="sgz-${suffix}">—</div>
-        <div class="stat-lbl">Z Axis °</div>
-      </div>
-      <div class="stat-tile">
-        <div class="stat-val" id="sghoriz-${suffix}">—</div>
-        <div class="stat-lbl">Horizontal °</div>
-      </div>
-    </div>`);
+function collectWidgetRefs(kind, suffix) {
+  const $ = id => document.getElementById(id);
+  switch (kind) {
+    case 'status': return {
+      statusRing:    $(`sr-${suffix}`),
+      statusIconCont:$(`sic-${suffix}`),
+      statusText:    $(`st-${suffix}`),
+      analogDisplay: $(`andsp-${suffix}`),
+      analogValue:   $(`anv-${suffix}`),
+      analogUnit:    $(`anu-${suffix}`),
+      analogExtra:   $(`anex-${suffix}`),
+      gyroDisplay:   $(`gydsp-${suffix}`),
+      gyroX: $(`gyx-${suffix}`), gyroY: $(`gyy-${suffix}`), gyroZ: $(`gyz-${suffix}`),
+      statusSince:   $(`ss-${suffix}`),
+    };
+    case 'event_counts': return {
+      statsBinary: $(`sgb-${suffix}`), statsAnalog: $(`sga-${suffix}`), statsGyro: $(`sgg-${suffix}`),
+      stOpensLbl: $(`solbl-${suffix}`), stClosesLbl: $(`sclbl-${suffix}`), stClosesTile: $(`scTile-${suffix}`),
+      stOpens: $(`so-${suffix}`), stCloses: $(`sc-${suffix}`),
+      stHoldsTile: $(`sh-${suffix}`), stDoublesTile: $(`sd-${suffix}`),
+      stHolds: $(`sholds-${suffix}`), stDoubles: $(`sdoubles-${suffix}`),
+      stRate: $(`srate-${suffix}`), stDur: $(`sdur-${suffix}`),
+      stCurrent: $(`scurr-${suffix}`), stMin: $(`smin-${suffix}`), stMax: $(`smax-${suffix}`), stAvg: $(`savg-${suffix}`),
+      stGyroX: $(`sgx-${suffix}`), stGyroY: $(`sgy-${suffix}`), stGyroZ: $(`sgz-${suffix}`), stGyroHoriz: $(`sghoriz-${suffix}`),
+    };
+    case 'chart': return { chartCanvas: $(`cc-${suffix}`), chartLegend: $(`cleg-${suffix}`) };
+    case 'log':   return { logWrap: $(`lw-${suffix}`), logEmpty: $(`le-${suffix}`) };
+    case 'last_update': return { lastUpdateValue: $(`luv-${suffix}`) };
+    case 'raw_value':   return { rawValue: $(`rvv-${suffix}`), rawUnit: $(`rvu-${suffix}`) };
+    default: return {};
+  }
+}
 
-  // ── Chart widget ──────────────────────────────────────────────────────────
-  const wChart = makeWidget(`w-chart-${suffix}`);
-  wChart.insertAdjacentHTML('beforeend', `
-    <div class="widget-header">
-      <div class="widget-icon">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z"/></svg>
-      </div>
-      <div>
-        <div class="widget-title">Activity Timeline</div>
-        <div class="widget-subtitle">Last 5 minutes · ${escHtml(name)}</div>
-      </div>
-    </div>
-    <div class="chart-wrap">
-      <canvas class="chart-canvas" id="cc-${suffix}"></canvas>
-      <div class="chart-legend" id="cleg-${suffix}">
-        <div class="legend-item"><div class="legend-pip" style="background:var(--c-closed)"></div>${escHtml(li)}</div>
-        <div class="legend-item"><div class="legend-pip" style="background:var(--c-open)"></div>${escHtml(la)}</div>
-      </div>
-    </div>`);
+function widgetIdSuffix(id) { return id.replace(/[^a-zA-Z0-9_-]/g, ''); }
 
-  // ── Log widget ────────────────────────────────────────────────────────────
-  const wLog = makeWidget(`w-log-${suffix}`);
-  wLog.insertAdjacentHTML('beforeend', `
+function renderWidget(def) {
+  if (widgetInstances[def.id]) return;   // already rendered
+  const suffix = widgetIdSuffix(def.id);
+  const dev    = def.devEUI ? deviceMeta[def.devEUI] : null;
+  const km     = widgetKindMeta(def.kind);
+
+  const el = makeWidget(`w-${suffix}`);
+  el.style.display    = '';
+  el.style.gridColumn = def.col || '1 / span 8';
+  el.style.gridRow    = def.row || '1 / span 6';
+  el.dataset.widgetId  = def.id;
+  el.insertAdjacentHTML('beforeend', `
     <div class="widget-header">
-      <div class="widget-icon">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
-      </div>
+      <div class="widget-icon" id="wi-${suffix}">${iconSVG(km.icon)}</div>
       <div>
-        <div class="widget-title">Event Log</div>
-        <div class="widget-subtitle">${escHtml(name)}</div>
+        <div class="widget-title" id="wt-${suffix}">${escHtml(def.title || km.label)}</div>
+        <div class="widget-subtitle" id="wsub-${suffix}">${escHtml(dev ? dev.name : 'No device selected')}</div>
       </div>
-      <button class="export-btn" onclick="exportLog('${eui}')" title="Export log.txt">
+      ${def.kind === 'log' ? `<button class="export-btn" onclick="exportLog('${def.devEUI || ''}')" title="Export log.txt">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zm-8 2V5h2v6h1.17L12 13.17 9.83 11H11zm-6 7h14v2H5z"/></svg>
         Export
-      </button>
+      </button>` : ''}
     </div>
-    <div class="log-wrap" id="lw-${suffix}">
-      <div class="log-empty" id="le-${suffix}">
-        <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-        <span>Waiting for events…</span>
-      </div>
-    </div>`);
+    ${widgetBodyHTML(def.kind, suffix)}`);
 
-  // Cache widget DOM refs
-  deviceWidgets[eui] = {
-    wStatus, wStats, wChart, wLog,
-    widgetIcon:   document.getElementById(`whi-${suffix}`),
-    statusRing:   document.getElementById(`sr-${suffix}`),
-    statusIconCont:document.getElementById(`sic-${suffix}`),
-    statusText:   document.getElementById(`st-${suffix}`),
-    analogDisplay:document.getElementById(`andsp-${suffix}`),
-    analogValue:  document.getElementById(`anv-${suffix}`),
-    analogUnit:   document.getElementById(`anu-${suffix}`),
-    analogExtra:  document.getElementById(`anex-${suffix}`),
-    gyroDisplay:  document.getElementById(`gydsp-${suffix}`),
-    gyroX:        document.getElementById(`gyx-${suffix}`),
-    gyroY:        document.getElementById(`gyy-${suffix}`),
-    gyroZ:        document.getElementById(`gyz-${suffix}`),
-    statusSince:  document.getElementById(`ss-${suffix}`),
-    statsBinary:  document.getElementById(`sgb-${suffix}`),
-    statsAnalog:  document.getElementById(`sga-${suffix}`),
-    statsGyro:    document.getElementById(`sgg-${suffix}`),
-    stOpens:      document.getElementById(`so-${suffix}`),
-    stCloses:     document.getElementById(`sc-${suffix}`),
-    stHoldsTile:  document.getElementById(`sh-${suffix}`),
-    stDoublesTile:document.getElementById(`sd-${suffix}`),
-    stHolds:      document.getElementById(`sholds-${suffix}`),
-    stDoubles:    document.getElementById(`sdoubles-${suffix}`),
-    stRate:       document.getElementById(`srate-${suffix}`),
-    stDur:        document.getElementById(`sdur-${suffix}`),
-    stCurrent:    document.getElementById(`scurr-${suffix}`),
-    stMin:        document.getElementById(`smin-${suffix}`),
-    stMax:        document.getElementById(`smax-${suffix}`),
-    stAvg:        document.getElementById(`savg-${suffix}`),
-    stGyroX:      document.getElementById(`sgx-${suffix}`),
-    stGyroY:      document.getElementById(`sgy-${suffix}`),
-    stGyroZ:      document.getElementById(`sgz-${suffix}`),
-    stGyroHoriz:  document.getElementById(`sghoriz-${suffix}`),
-    chartCanvas:  document.getElementById(`cc-${suffix}`),
-    chartLegend:  document.getElementById(`cleg-${suffix}`),
-    logWrap:      document.getElementById(`lw-${suffix}`),
-    logEmpty:     document.getElementById(`le-${suffix}`),
-  };
+  const refs = collectWidgetRefs(def.kind, suffix);
+  widgetInstances[def.id] = { kind: def.kind, devEUI: def.devEUI || null, el, refs };
+  if (def.devEUI) {
+    (widgetsByDevice[def.devEUI] = widgetsByDevice[def.devEUI] || []);
+    if (!widgetsByDevice[def.devEUI].includes(def.id)) widgetsByDevice[def.devEUI].push(def.id);
+  }
+  attachWidgetContextMenu(el, def.id);
+  applyWidgetDeviceType(def.id);
+  refreshWidgetInstance(def.id);
+  updateEmptyGridHint();
+}
 
-  // Apply layout and initial type styling
-  applyDeviceLayout(eui);
-  applyDeviceType(eui, dtype);
+// Paints a widget's current state immediately after it's created (or its
+// device/kind changes via Configure), so it isn't blank until the next
+// live event arrives.
+function refreshWidgetInstance(id) {
+  const wi = widgetInstances[id];
+  if (!wi) return;
+  const eui = wi.devEUI;
+  const ds  = eui ? deviceStates[eui] : null;
+  const dm  = eui ? deviceMeta[eui]   : null;
+  if (!ds || !dm) return;
+
+  switch (wi.kind) {
+    case 'status':
+      if (dm.deviceType === 'tilt' && ds.lastExtra?.x !== undefined) {
+        updateGyroStatus(eui, ds.lastExtra.x, ds.lastExtra.y, ds.lastExtra.z);
+      } else if (dm.isAnalog) {
+        if (ds.lastRawValue !== null) updateAnalogStatus(eui, ds.lastRawValue, ds.lastUnit, ds.lastExtra || {});
+      } else if (ds.lastVal !== null) {
+        updateStatusWidget(eui, ds.lastVal, ds.lastExtra || {});
+      }
+      break;
+    case 'event_counts':  updateStats(eui); break;
+    case 'last_update':   updateLastUpdateWidget(eui); break;
+    case 'raw_value':     if (ds.lastRawValue !== null) updateRawValueWidget(eui, ds.lastRawValue, ds.lastUnit); break;
+    case 'chart':         drawChart(eui); break;
+    case 'log':           backfillLogWidget(id); break;
+  }
+}
+
+function removeWidgetInstance(id) {
+  const wi = widgetInstances[id];
+  if (!wi) return;
+  wi.el.remove();
+  delete widgetInstances[id];
+  if (wi.devEUI && widgetsByDevice[wi.devEUI]) {
+    widgetsByDevice[wi.devEUI] = widgetsByDevice[wi.devEUI].filter(x => x !== id);
+  }
+  updateEmptyGridHint();
+}
+
+function updateEmptyGridHint() {
+  dom.noDevMsg.style.display = Object.keys(widgetInstances).length ? 'none' : '';
 }
 
 // ── Device selection ───────────────────────────────────────────────────────
+// NOTE: selecting a device no longer controls widget visibility — every
+// widget is always visible, bound to its own device via Configure. This
+// only drives the app bar's byte-offset config buttons + type selector,
+// which are global per-device-type settings rather than per-widget.
 function selectDevice(eui) {
   eui = eui.toUpperCase();
   selectedEUI = eui;
 
-  // Hide all widget sets
-  Object.keys(deviceWidgets).forEach(e => {
-    const ws = deviceWidgets[e];
-    ws.wStatus.style.display = 'none';
-    ws.wStats.style.display  = 'none';
-    ws.wChart.style.display  = 'none';
-    ws.wLog.style.display    = 'none';
-  });
-
-  // Show selected device's widgets
-  const ws = deviceWidgets[eui];
-  if (ws) {
-    ws.wStatus.style.display = '';
-    ws.wStats.style.display  = '';
-    ws.wChart.style.display  = '';
-    ws.wLog.style.display    = '';
-    dom.noDevMsg.style.display = 'none';
-    drawChart(eui);
-  } else {
-    dom.noDevMsg.style.display = '';
-  }
-
   updateDropdownSelection();
   updateTypeSelector(eui);
   const dm = deviceMeta[eui];
-  if (dm) applyDeviceType(eui, dm.deviceType || 'generic');
+  if (dm) applyConfigButtonsForType(dm.deviceType || 'generic');
   localStorage.setItem('lora-selected-device', eui);
-
-  // Immediately paint the status widget from the last known state so it isn't
-  // blank/greyed until the next live event arrives.
-  refreshDeviceStatus(eui);
-}
-
-function refreshDeviceStatus(eui) {
-  const ds = deviceStates[eui];
-  const dm = deviceMeta[eui];
-  if (!ds || !dm) return;
-
-  if (dm.deviceType === 'tilt' && ds.lastExtra?.x !== undefined) {
-    updateGyroStatus(eui, ds.lastExtra.x, ds.lastExtra.y, ds.lastExtra.z);
-  } else if (dm.isAnalog) {
-    if (ds.lastRawValue !== null) {
-      updateAnalogStatus(eui, ds.lastRawValue, ds.lastUnit, ds.lastExtra || {});
-    }
-  } else {
-    if (ds.lastVal !== null) {
-      updateStatusWidget(eui, ds.lastVal, ds.lastExtra || {});
-    }
-  }
-
-  updateStats(eui);
 }
 
 // ── SSE connection ─────────────────────────────────────────────────────────
@@ -1995,7 +2120,10 @@ function handleHydration(msg) {
   const histMap  = msg.history_by_device  || {};
   const statsMap = msg.stats_by_device    || {};
 
-  // Register metadata and build widgets for new devices
+  // Register metadata for every known device. Widgets are independent of
+  // this list now — they render from the saved widget layout (see
+  // maybeRenderWidgets below), each bound to whichever devEUI it was
+  // configured with, regardless of whether that device is in this batch.
   devices.forEach(dev => {
     const eui = dev.devEUI.toUpperCase();
     deviceMeta[eui] = buildDeviceMeta(dev);
@@ -2018,8 +2146,7 @@ function handleHydration(msg) {
         if (ss.count_value != null) deviceStates[eui].countValue  = ss.count_value;
       }
     }
-    if (!deviceWidgets[eui]) createDeviceWidgets(dev);
-    else applyDeviceType(eui, dtype);
+    applyDeviceType(eui, dtype);
   });
 
   buildDevicesDropdown(devices);
@@ -2031,44 +2158,42 @@ function handleHydration(msg) {
     if (statsMap[eui]) applyStats(eui, statsMap[eui]);
   });
 
-  // Auto-select: restore last selection or pick first device
+  // Restore last selection or pick first device — drives the app bar's
+  // byte-offset config buttons only, not widget visibility.
   const restored = localStorage.getItem('lora-selected-device');
   const firstEUI = devices[0]?.devEUI?.toUpperCase();
-  const target   = (restored && deviceWidgets[restored]) ? restored : firstEUI;
+  const target   = (restored && deviceMeta[restored]) ? restored : firstEUI;
   if (target) selectDevice(target);
-  else        dom.noDevMsg.style.display = '';
+
+  devicesReady = true;
+  maybeRenderWidgets();
 }
 
 // ── Device list update (add / remove) ──────────────────────────────────────
-function removeDeviceWidgets(eui) {
-  const ws = deviceWidgets[eui];
-  if (!ws) return;
-  ws.wStatus.remove();
-  ws.wStats.remove();
-  ws.wChart.remove();
-  ws.wLog.remove();
-  delete deviceWidgets[eui];
-  delete deviceStates[eui];
-  delete deviceMeta[eui];
-}
-
 function handleDevicesUpdate(devices) {
   const freshEUIs = new Set(devices.map(d => d.devEUI.toUpperCase()));
 
-  // Remove devices no longer on the gateway
-  Object.keys(deviceWidgets).forEach(eui => {
-    if (!freshEUIs.has(eui)) removeDeviceWidgets(eui);
+  // Devices removed from the gateway: drop their state, and remove (and
+  // un-persist) any widget bound to them so nothing points at a ghost device.
+  Object.keys(deviceMeta).forEach(eui => {
+    if (freshEUIs.has(eui)) return;
+    delete deviceStates[eui];
+    delete deviceMeta[eui];
+    const ids = (widgetsByDevice[eui] || []).slice();
+    if (ids.length) {
+      ids.forEach(id => removeWidgetInstance(id));
+      widgets = widgets.filter(w => !ids.includes(w.id));
+      WidgetStore.save(widgets);
+    }
+    delete widgetsByDevice[eui];
   });
 
-  // Update metadata and create widgets for new devices
+  // Update metadata for devices we still know about / newly see
   devices.forEach(dev => {
     const eui = dev.devEUI.toUpperCase();
     deviceMeta[eui] = buildDeviceMeta(dev);
-    const dtype = deviceMeta[eui].deviceType;
-
-    if (!deviceStates[eui])  deviceStates[eui]  = newDeviceState(null);
-    if (!deviceWidgets[eui]) createDeviceWidgets(dev);
-    else                     applyDeviceType(eui, dtype);
+    if (!deviceStates[eui]) deviceStates[eui] = newDeviceState(null);
+    applyDeviceType(eui, deviceMeta[eui].deviceType);
   });
 
   buildDevicesDropdown(devices);
@@ -2077,8 +2202,16 @@ function handleDevicesUpdate(devices) {
   if (selectedEUI && !freshEUIs.has(selectedEUI)) {
     const firstEUI = devices[0]?.devEUI?.toUpperCase();
     if (firstEUI) selectDevice(firstEUI);
-    else { selectedEUI = null; dom.noDevMsg.style.display = ''; }
+    else selectedEUI = null;
   }
+}
+
+// Renders the saved widget layout once both the device metadata and the
+// widget list itself have loaded (order between the two isn't guaranteed).
+function maybeRenderWidgets() {
+  if (!devicesReady || !widgetsReady) return;
+  widgets.forEach(renderWidget);
+  updateEmptyGridHint();
 }
 
 // ── Event ingestion ────────────────────────────────────────────────────────
@@ -2100,6 +2233,7 @@ function ingestBinaryEvent(eui, ev) {
 
   const val = ev.value;
   const ms  = ev.timestamp * 1000;
+  ds.lastEventAt = ms;
 
   if (eui === selectedEUI) {
     dom.lastSeen.textContent = 'Last: ' + new Date(ms).toLocaleTimeString('en-US', {
@@ -2121,7 +2255,8 @@ function ingestBinaryEvent(eui, ev) {
     ds.lastVal      = val;
     ds.lastExtra    = extra;
     ds.lastChangeAt = ms;
-    if (eui === selectedEUI) updateStatusWidget(eui, val, extra);
+    updateStatusWidget(eui, val, extra);
+    updateLastUpdateWidget(eui);
   }
 
   // Button: cancel any pending expiry timer on every incoming event, then
@@ -2138,10 +2273,8 @@ function ingestBinaryEvent(eui, ev) {
         // Push a synthetic release point so the chart shows the revert.
         const expireMs = Date.now();
         ds.chartPts.push({ time: expireMs, value: 1 });
-        if (eui === selectedEUI) {
-          updateStatusWidget(eui, 1, {});
-          drawChart(eui);
-        }
+        updateStatusWidget(eui, 1, {});
+        drawChart(eui);
       }, buttonExpireMs);
     }
   }
@@ -2151,7 +2284,7 @@ function ingestBinaryEvent(eui, ev) {
   const cutoff = Date.now() - 302000;
   while (ds.chartPts.length && ds.chartPts[0].time < cutoff) ds.chartPts.shift();
 
-  if (eui === selectedEUI) drawChart(eui);
+  drawChart(eui);
 }
 
 function ingestAnalogEvent(eui, ev) {
@@ -2162,6 +2295,7 @@ function ingestAnalogEvent(eui, ev) {
   const rv    = ev.raw_value;
   const unit  = ev.unit   || '';
   const ms    = ev.timestamp * 1000;
+  ds.lastEventAt = ms;
   const extra = ev.extra || {};
 
   if (eui === selectedEUI) {
@@ -2182,11 +2316,10 @@ function ingestAnalogEvent(eui, ev) {
     while (ds.chartPts.length && ds.chartPts[0].time < cutoff) ds.chartPts.shift();
 
     addGyroLogRow(eui, extra.x, extra.y, extra.z, ms);
-    if (eui === selectedEUI) {
-      updateGyroStatus(eui, extra.x, extra.y, extra.z);
-      updateStats(eui);
-      drawChart(eui);
-    }
+    updateGyroStatus(eui, extra.x, extra.y, extra.z);
+    updateLastUpdateWidget(eui);
+    updateStats(eui);
+    drawChart(eui);
     return;
   }
 
@@ -2204,11 +2337,11 @@ function ingestAnalogEvent(eui, ev) {
 
     addAnalogLogRow(eui, rv, unit, extra, ms);
 
-    if (eui === selectedEUI) {
-      updateAnalogStatus(eui, rv, unit, extra);
-      updateStats(eui);
-      drawChart(eui);
-    }
+    updateAnalogStatus(eui, rv, unit, extra);
+    updateRawValueWidget(eui, rv, unit);
+    updateLastUpdateWidget(eui);
+    updateStats(eui);
+    drawChart(eui);
   }
 }
 
@@ -2225,105 +2358,140 @@ function applyStats(eui, s) {
   if (s.max_value    != null) ds.maxValue    = s.max_value;
   if (s.sum_value    != null) ds.sumValue    = s.sum_value;
   if (s.count_value  != null) ds.countValue  = s.count_value;
-  if (eui === selectedEUI) updateStats(eui);
+  updateStats(eui);
 }
 
 // ── Status widget ──────────────────────────────────────────────────────────
+// Every update* function below is a dispatcher: it loops whichever widget
+// instances of the relevant kind are bound to `eui` (zero, one, or many) and
+// repaints each. This replaces the old single-`deviceWidgets[eui]`-singleton
+// model, since multiple widgets (or none) can now point at the same device.
+function statusWidgetsFor(eui)      { return (widgetsByDevice[eui] || []).filter(id => widgetInstances[id].kind === 'status'); }
+function eventCountWidgetsFor(eui)  { return (widgetsByDevice[eui] || []).filter(id => widgetInstances[id].kind === 'event_counts'); }
+function lastUpdateWidgetsFor(eui)  { return (widgetsByDevice[eui] || []).filter(id => widgetInstances[id].kind === 'last_update'); }
+function rawValueWidgetsFor(eui)    { return (widgetsByDevice[eui] || []).filter(id => widgetInstances[id].kind === 'raw_value'); }
+
 function updateStatusWidget(eui, val, extra) {
-  const ws = deviceWidgets[eui];
   const dm = deviceMeta[eui];
-  if (!ws || !dm) return;
+  if (!dm) return;
   const la = dm.labelActive;
   const li = dm.labelInactive;
-  if (val === 0) {
-    const ringCls = extra?.held ? 'held' : extra?.double ? 'double' : 'open';
-    ws.statusRing.className   = `status-ring ${ringCls}`;
-    ws.statusText.className   = `status-text ${ringCls}`;
-    ws.statusText.textContent = extra?.held ? 'HELD' : extra?.double ? 'DOUBLE' : la;
-  } else {
-    ws.statusRing.className   = 'status-ring closed';
-    ws.statusText.className   = 'status-text closed';
-    ws.statusText.textContent = li;
-  }
+  statusWidgetsFor(eui).forEach(id => {
+    const ws = widgetInstances[id].refs;
+    if (val === 0) {
+      const ringCls = extra?.held ? 'held' : extra?.double ? 'double' : 'open';
+      ws.statusRing.className   = `status-ring ${ringCls}`;
+      ws.statusText.className   = `status-text ${ringCls}`;
+      ws.statusText.textContent = extra?.held ? 'HELD' : extra?.double ? 'DOUBLE' : la;
+    } else {
+      ws.statusRing.className   = 'status-ring closed';
+      ws.statusText.className   = 'status-text closed';
+      ws.statusText.textContent = li;
+    }
+  });
 }
 
 function updateAnalogStatus(eui, rawValue, unit, extra) {
-  const ws = deviceWidgets[eui];
-  if (!ws) return;
   const dispVal  = unit === '°C' ? _cToDisplay(rawValue) : rawValue;
   const dispUnit = _displayTempUnit(unit);
-  ws.analogValue.textContent = dispVal !== null && dispVal !== undefined ? String(dispVal) : '—';
-  ws.analogUnit.textContent  = dispUnit || '';
-
-  ws.analogExtra.innerHTML = '';
   const EXTRA_UNITS = { humidity: '%', temperature: '°C', pressure: 'hPa', co2: 'ppm', voc: 'ppb' };
-  for (const [k, v] of Object.entries(extra || {})) {
-    const chip = document.createElement('div');
-    chip.className = 'analog-extra-chip';
-    chip.textContent = `${k.replace(/_/g, ' ')}: ${v}${EXTRA_UNITS[k] || ''}`;
-    ws.analogExtra.appendChild(chip);
-  }
+  statusWidgetsFor(eui).forEach(id => {
+    const ws = widgetInstances[id].refs;
+    ws.analogValue.textContent = dispVal !== null && dispVal !== undefined ? String(dispVal) : '—';
+    ws.analogUnit.textContent  = dispUnit || '';
+    ws.analogExtra.innerHTML = '';
+    for (const [k, v] of Object.entries(extra || {})) {
+      const chip = document.createElement('div');
+      chip.className = 'analog-extra-chip';
+      chip.textContent = `${k.replace(/_/g, ' ')}: ${v}${EXTRA_UNITS[k] || ''}`;
+      ws.analogExtra.appendChild(chip);
+    }
+  });
 }
 
 function updateGyroStatus(eui, x, y, z) {
-  const ws = deviceWidgets[eui];
-  if (!ws) return;
-  ws.gyroX.textContent = x !== undefined ? x.toFixed(2) : '—';
-  ws.gyroY.textContent = y !== undefined ? y.toFixed(2) : '—';
-  ws.gyroZ.textContent = z !== undefined ? z.toFixed(2) : '—';
+  statusWidgetsFor(eui).forEach(id => {
+    const ws = widgetInstances[id].refs;
+    ws.gyroX.textContent = x !== undefined ? x.toFixed(2) : '—';
+    ws.gyroY.textContent = y !== undefined ? y.toFixed(2) : '—';
+    ws.gyroZ.textContent = z !== undefined ? z.toFixed(2) : '—';
+  });
 }
 
-// ── Stats widget ───────────────────────────────────────────────────────────
+function updateLastUpdateWidget(eui) {
+  const ds = deviceStates[eui];
+  if (!ds) return;
+  lastUpdateWidgetsFor(eui).forEach(id => {
+    const ws = widgetInstances[id].refs;
+    ws.lastUpdateValue.textContent = ds.lastEventAt ? fmtDur(Math.floor((Date.now() - ds.lastEventAt) / 1000)) : '—';
+  });
+}
+
+function updateRawValueWidget(eui, rawValue, unit) {
+  const dispVal  = unit === '°C' ? _cToDisplay(rawValue) : rawValue;
+  const dispUnit = _displayTempUnit(unit);
+  rawValueWidgetsFor(eui).forEach(id => {
+    const ws = widgetInstances[id].refs;
+    ws.rawValue.textContent = dispVal !== null && dispVal !== undefined ? String(dispVal) : '—';
+    ws.rawUnit.textContent  = dispUnit || '';
+  });
+}
+
+// ── Event-counts widget ────────────────────────────────────────────────────
 function updateStats(eui) {
-  const ws = deviceWidgets[eui];
   const ds = deviceStates[eui];
   const dm = deviceMeta[eui];
-  if (!ws || !ds || !dm) return;
+  if (!ds || !dm) return;
 
-  if (dm.deviceType === 'tilt' && dm.isAnalog) {
-    const ex = ds.lastExtra || {};
-    const x = ex.x, y = ex.y, z = ex.z;
-    ws.stGyroX.textContent     = x !== undefined ? x.toFixed(2) + '°' : '—';
-    ws.stGyroY.textContent     = y !== undefined ? y.toFixed(2) + '°' : '—';
-    ws.stGyroZ.textContent     = z !== undefined ? z.toFixed(2) + '°' : '—';
-    if (x !== undefined && y !== undefined) {
-      const horiz = Math.sqrt(x * x + y * y);
-      ws.stGyroHoriz.textContent = horiz.toFixed(2) + '°';
+  eventCountWidgetsFor(eui).forEach(id => {
+    const ws = widgetInstances[id].refs;
+    if (dm.deviceType === 'tilt' && dm.isAnalog) {
+      const ex = ds.lastExtra || {};
+      const x = ex.x, y = ex.y, z = ex.z;
+      ws.stGyroX.textContent     = x !== undefined ? x.toFixed(2) + '°' : '—';
+      ws.stGyroY.textContent     = y !== undefined ? y.toFixed(2) + '°' : '—';
+      ws.stGyroZ.textContent     = z !== undefined ? z.toFixed(2) + '°' : '—';
+      if (x !== undefined && y !== undefined) {
+        const horiz = Math.sqrt(x * x + y * y);
+        ws.stGyroHoriz.textContent = horiz.toFixed(2) + '°';
+      }
+    } else if (dm.isAnalog) {
+      const rawUnit  = ds.lastUnit || '';
+      const unit     = _displayTempUnit(rawUnit);
+      const conv     = v => rawUnit === '°C' ? _cToDisplay(v) : v;
+      ws.stCurrent.textContent = ds.lastRawValue !== null ? conv(ds.lastRawValue) + unit : '—';
+      ws.stMin.textContent     = ds.minValue     !== null ? conv(ds.minValue)     + unit : '—';
+      ws.stMax.textContent     = ds.maxValue     !== null ? conv(ds.maxValue)     + unit : '—';
+      ws.stAvg.textContent     = ds.countValue > 0
+        ? conv(+(ds.sumValue / ds.countValue).toFixed(1)) + unit : '—';
+    } else {
+      ws.stOpens.textContent  = ds.opens;
+      ws.stCloses.textContent = ds.closes;
+      if (ws.stHolds)   ws.stHolds.textContent   = ds.holds   ?? 0;
+      if (ws.stDoubles) ws.stDoubles.textContent = ds.doubles ?? 0;
+      const elapsedMin = (Date.now() - ds.sessionStart) / 60000;
+      const total      = ds.opens + ds.closes;
+      ws.stRate.textContent = elapsedMin > 0.1 ? (total / elapsedMin).toFixed(1) : '—';
     }
-  } else if (dm.isAnalog) {
-    const rawUnit  = ds.lastUnit || '';
-    const unit     = _displayTempUnit(rawUnit);
-    const conv     = v => rawUnit === '°C' ? _cToDisplay(v) : v;
-    ws.stCurrent.textContent = ds.lastRawValue !== null ? conv(ds.lastRawValue) + unit : '—';
-    ws.stMin.textContent     = ds.minValue     !== null ? conv(ds.minValue)     + unit : '—';
-    ws.stMax.textContent     = ds.maxValue     !== null ? conv(ds.maxValue)     + unit : '—';
-    ws.stAvg.textContent     = ds.countValue > 0
-      ? conv(+(ds.sumValue / ds.countValue).toFixed(1)) + unit : '—';
-  } else {
-    ws.stOpens.textContent  = ds.opens;
-    ws.stCloses.textContent = ds.closes;
-    if (ws.stHolds)   ws.stHolds.textContent   = ds.holds   ?? 0;
-    if (ws.stDoubles) ws.stDoubles.textContent = ds.doubles ?? 0;
-    const elapsedMin = (Date.now() - ds.sessionStart) / 60000;
-    const total      = ds.opens + ds.closes;
-    ws.stRate.textContent = elapsedMin > 0.1 ? (total / elapsedMin).toFixed(1) : '—';
-  }
+  });
 }
 
-// Called every second to tick elapsed-time displays ("state age", "X ago").
-// Also calls updateStats so analog averages stay current without needing a new event.
+// Called every second to tick elapsed-time displays ("state age", "X ago")
+// for every device's widgets, not just a "selected" one, and to keep analog
+// averages current without needing a new event.
 function updateStatsDuration() {
-  if (!selectedEUI) return;
-  const ws = deviceWidgets[selectedEUI];
-  const ds = deviceStates[selectedEUI];
-  const dm = deviceMeta[selectedEUI];
-  if (!ws || !ds || !dm) return;
-  if (!dm.isAnalog && ds.lastChangeAt) {
-    const secs = Math.floor((Date.now() - ds.lastChangeAt) / 1000);
-    ws.stDur.textContent       = fmtDur(secs);
-    ws.statusSince.textContent = fmtDur(secs) + ' ago';
-  }
-  updateStats(selectedEUI);
+  Object.keys(deviceStates).forEach(eui => {
+    const ds = deviceStates[eui];
+    const dm = deviceMeta[eui];
+    if (!ds || !dm) return;
+    if (!dm.isAnalog && ds.lastChangeAt) {
+      const secs = Math.floor((Date.now() - ds.lastChangeAt) / 1000);
+      eventCountWidgetsFor(eui).forEach(id => { widgetInstances[id].refs.stDur.textContent = fmtDur(secs); });
+      statusWidgetsFor(eui).forEach(id => { widgetInstances[id].refs.statusSince.textContent = fmtDur(secs) + ' ago'; });
+    }
+    updateLastUpdateWidget(eui);
+    updateStats(eui);
+  });
 }
 
 function fmtDur(s) {
@@ -2333,16 +2501,20 @@ function fmtDur(s) {
 }
 
 // ── Event log ──────────────────────────────────────────────────────────────
-function addLogRow(eui, val, ms, prevDurMs, extra) {
-  const ws = deviceWidgets[eui];
-  const ds = deviceStates[eui];
-  const dm = deviceMeta[eui];
-  if (!ws || !ds || !dm) return;
+function logWidgetsFor(eui) { return (widgetsByDevice[eui] || []).filter(id => widgetInstances[id].kind === 'log'); }
 
+function _appendLogRow(ws, html) {
   const le = ws.logEmpty;
   if (le) le.remove();
   ws.logEmpty = null;
+  const row = document.createElement('div');
+  row.className = 'log-row';
+  row.innerHTML = html;
+  ws.logWrap.insertBefore(row, ws.logWrap.firstChild);
+  while (ws.logWrap.children.length > 300) ws.logWrap.removeChild(ws.logWrap.lastChild);
+}
 
+function _binaryLogRowHTML(dm, val, ms, prevDurMs, extra) {
   const isOpen = val === 0;
   const isHeld   = isOpen && !!extra?.held;
   const isDouble = isOpen && !!extra?.double;
@@ -2356,81 +2528,96 @@ function addLogRow(eui, val, ms, prevDurMs, extra) {
     fractionalSecondDigits: 2,
   });
   const durStr = prevDurMs != null ? `(prev: ${fmtDur(Math.round(prevDurMs / 1000))})` : '';
-
-  const row = document.createElement('div');
-  row.className = 'log-row';
-  row.innerHTML = `
+  return `
     <div class="log-pip ${cls}"></div>
     <div class="log-state ${cls}">${escHtml(stateText)}</div>
     <div class="log-time">${timeStr}</div>
     <div class="log-dur">${durStr}</div>
     <div class="log-raw">val=${val}</div>
   `;
-
-  ds.log.push({ ms, val, prevDurMs, extra: extra || {} });
-  ws.logWrap.insertBefore(row, ws.logWrap.firstChild);
-  while (ws.logWrap.children.length > 300) ws.logWrap.removeChild(ws.logWrap.lastChild);
 }
 
-function addAnalogLogRow(eui, rawValue, unit, extra, ms) {
-  const ws = deviceWidgets[eui];
-  const ds = deviceStates[eui];
-  if (!ws || !ds) return;
-
-  const le = ws.logEmpty;
-  if (le) le.remove();
-  ws.logEmpty = null;
-
+function _analogLogRowHTML(rawValue, unit, extra, ms) {
   const timeStr = new Date(ms).toLocaleTimeString('en-US', {
     hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
     fractionalSecondDigits: 2,
   });
   const extraStr = Object.entries(extra || {}).map(([k, v]) => `${k}: ${v}`).join(' · ');
-
   const dispLogVal  = unit === '°C' ? _cToDisplay(rawValue) : rawValue;
   const dispLogUnit = _displayTempUnit(unit);
-  const row = document.createElement('div');
-  row.className = 'log-row';
-  row.innerHTML = `
+  return `
     <div class="log-pip" style="background:var(--md-primary)"></div>
     <div class="log-state" style="color:var(--md-primary)">${dispLogVal}${escHtml(dispLogUnit)}</div>
     <div class="log-time">${timeStr}</div>
     ${extraStr ? `<div class="log-dur">${escHtml(extraStr)}</div>` : ''}
   `;
-  ds.log.push({ ms, rawValue, unit });
-  ws.logWrap.insertBefore(row, ws.logWrap.firstChild);
-  while (ws.logWrap.children.length > 300) ws.logWrap.removeChild(ws.logWrap.lastChild);
 }
 
-function addGyroLogRow(eui, x, y, z, ms) {
-  const ws = deviceWidgets[eui];
-  const ds = deviceStates[eui];
-  if (!ws || !ds) return;
-
-  const le = ws.logEmpty;
-  if (le) le.remove();
-  ws.logEmpty = null;
-
+function _gyroLogRowHTML(x, y, z, ms) {
   const timeStr = new Date(ms).toLocaleTimeString('en-US', {
     hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
     fractionalSecondDigits: 2,
   });
-
-  const row = document.createElement('div');
-  row.className = 'log-row';
-  row.innerHTML = `
+  return `
     <div class="log-pip" style="background:var(--md-primary)"></div>
     <div class="log-state" style="color:var(--md-primary)">X ${x?.toFixed(2)}° Y ${y?.toFixed(2)}° Z ${z?.toFixed(2)}°</div>
     <div class="log-time">${timeStr}</div>
   `;
+}
+
+function addLogRow(eui, val, ms, prevDurMs, extra) {
+  const ds = deviceStates[eui];
+  const dm = deviceMeta[eui];
+  if (!ds || !dm) return;
+  ds.log.push({ ms, val, prevDurMs, extra: extra || {} });
+  const html = _binaryLogRowHTML(dm, val, ms, prevDurMs, extra);
+  logWidgetsFor(eui).forEach(id => _appendLogRow(widgetInstances[id].refs, html));
+}
+
+function addAnalogLogRow(eui, rawValue, unit, extra, ms) {
+  const ds = deviceStates[eui];
+  if (!ds) return;
+  ds.log.push({ ms, rawValue, unit });
+  const html = _analogLogRowHTML(rawValue, unit, extra, ms);
+  logWidgetsFor(eui).forEach(id => _appendLogRow(widgetInstances[id].refs, html));
+}
+
+function addGyroLogRow(eui, x, y, z, ms) {
+  const ds = deviceStates[eui];
+  if (!ds) return;
   ds.log.push({ ms, x, y, z });
-  ws.logWrap.insertBefore(row, ws.logWrap.firstChild);
-  while (ws.logWrap.children.length > 300) ws.logWrap.removeChild(ws.logWrap.lastChild);
+  const html = _gyroLogRowHTML(x, y, z, ms);
+  logWidgetsFor(eui).forEach(id => _appendLogRow(widgetInstances[id].refs, html));
+}
+
+// Backfills a freshly created log widget from that device's already-recorded
+// history (ds.log), so it doesn't start empty when other log widgets (or
+// this device generally) already have events on record.
+function backfillLogWidget(widgetId) {
+  const wi = widgetInstances[widgetId];
+  if (!wi || wi.kind !== 'log' || !wi.devEUI) return;
+  const ds = deviceStates[wi.devEUI];
+  const dm = deviceMeta[wi.devEUI];
+  if (!ds || !dm) return;
+  ds.log.forEach(entry => {
+    const html = entry.val !== undefined      ? _binaryLogRowHTML(dm, entry.val, entry.ms, entry.prevDurMs, entry.extra)
+               : entry.rawValue !== undefined ? _analogLogRowHTML(entry.rawValue, entry.unit, {}, entry.ms)
+               : _gyroLogRowHTML(entry.x, entry.y, entry.z, entry.ms);
+    _appendLogRow(wi.refs, html);
+  });
 }
 
 // ── Activity chart ─────────────────────────────────────────────────────────
+function chartWidgetsFor(eui) { return (widgetsByDevice[eui] || []).filter(id => widgetInstances[id].kind === 'chart'); }
+function redrawAllCharts() { Object.keys(widgetsByDevice).forEach(drawChart); }
+
+// Dispatcher: redraws every chart widget bound to this device (there may be
+// several, or none) into each one's own canvas.
 function drawChart(eui) {
-  const ws = deviceWidgets[eui];
+  chartWidgetsFor(eui).forEach(id => _paintChartCanvas(eui, widgetInstances[id].refs));
+}
+
+function _paintChartCanvas(eui, ws) {
   const ds = deviceStates[eui];
   const dm = deviceMeta[eui];
   if (!ws || !ds || !dm) return;
@@ -2682,60 +2869,77 @@ function drawAnalogChart(eui, ctx, W, H, plotW, plotH, padLeft, padTop, padBot, 
 //   binary  — ring + state text + binary stats (door, motion, button, generic)
 //   analog  — big numeric value + analog stats + filled-area chart (temp, sound)
 //   gyro    — X/Y/Z axis values + per-axis stats + 3-line colored chart (tilt)
-function applyDeviceType(eui, type) {
-  const ws = deviceWidgets[eui];
-  const dm = deviceMeta[eui];
-  if (!ws) return;
+//
+// Byte-offset config buttons live in the app bar (global per-device-type
+// settings, not per-widget) — only touched for the currently selected device.
+function applyConfigButtonsForType(type) {
+  const isGyro = type === 'tilt';
+  const cfgBtn      = document.getElementById('tilt-cfg-btn');
+  const tcfgBtn     = document.getElementById('temp-cfg-btn');
+  const scfgBtn     = document.getElementById('sound-cfg-btn');
+  const bcfgBtn     = document.getElementById('button-cfg-btn');
+  const expireBtn   = document.getElementById('button-expire-btn');
+  const doorCfgBtn  = document.getElementById('door-cfg-btn');
+  const motCfgBtn   = document.getElementById('motion-cfg-btn');
+  const genCfgBtn   = document.getElementById('generic-cfg-btn');
+  const tuBtn     = document.getElementById('temp-unit-btn');
+  if (cfgBtn)     cfgBtn.style.display     = isGyro                ? '' : 'none';
+  if (tcfgBtn)    tcfgBtn.style.display    = type === 'temperature' ? '' : 'none';
+  if (tuBtn)      tuBtn.style.display      = type === 'temperature' ? '' : 'none';
+  if (scfgBtn)    scfgBtn.style.display    = type === 'sound'       ? '' : 'none';
+  if (bcfgBtn)    bcfgBtn.style.display    = type === 'button'      ? '' : 'none';
+  if (expireBtn)  expireBtn.style.display  = type === 'button'      ? '' : 'none';
+  if (doorCfgBtn) doorCfgBtn.style.display = type === 'door'        ? '' : 'none';
+  if (motCfgBtn)  motCfgBtn.style.display  = type === 'motion'      ? '' : 'none';
+  if (genCfgBtn)  genCfgBtn.style.display  = type === 'generic'     ? '' : 'none';
+  _syncDevsBtnIcon();
+}
 
+// Called whenever a device's type is (re)determined — fans out to every
+// widget instance bound to that device (there may be zero, one, or many).
+function applyDeviceType(eui, type) {
+  const dm = deviceMeta[eui];
+  const prof = typeProfile(type);
+  if (dm) { dm.deviceType = type; dm.isAnalog = prof.analog; }
+  if (eui === selectedEUI) applyConfigButtonsForType(type);
+  (widgetsByDevice[eui] || []).forEach(id => applyWidgetDeviceType(id));
+}
+
+// Adapts one widget instance's visuals to its bound device's current type.
+// No-op for kinds that don't depend on device type (last_update, raw_value).
+function applyWidgetDeviceType(widgetId) {
+  const wi = widgetInstances[widgetId];
+  if (!wi || !wi.devEUI) return;
+  const dm   = deviceMeta[wi.devEUI];
+  const type = dm?.deviceType || 'generic';
   const prof   = typeProfile(type);
   const analog = prof.analog;
   const isGyro = type === 'tilt';
+  const ws     = wi.refs;
 
-  // Update icons in the widget header and the large status ring.
-  ws.widgetIcon.innerHTML     = iconSVG(prof.icon, 22);
-  ws.statusIconCont.innerHTML = iconSVG(prof.icon, 72);
-
-  // Byte-offset config buttons live in the app bar (not per-widget), so only
-  // update them when we're processing the currently selected device.
-  if (eui === selectedEUI) {
-    const cfgBtn      = document.getElementById('tilt-cfg-btn');
-    const tcfgBtn     = document.getElementById('temp-cfg-btn');
-    const scfgBtn     = document.getElementById('sound-cfg-btn');
-    const bcfgBtn     = document.getElementById('button-cfg-btn');
-    const expireBtn   = document.getElementById('button-expire-btn');
-    const doorCfgBtn  = document.getElementById('door-cfg-btn');
-    const motCfgBtn   = document.getElementById('motion-cfg-btn');
-    const genCfgBtn   = document.getElementById('generic-cfg-btn');
-    const tuBtn     = document.getElementById('temp-unit-btn');
-    if (cfgBtn)     cfgBtn.style.display     = isGyro                ? '' : 'none';
-    if (tcfgBtn)    tcfgBtn.style.display    = type === 'temperature' ? '' : 'none';
-    if (tuBtn)      tuBtn.style.display      = type === 'temperature' ? '' : 'none';
-    if (scfgBtn)    scfgBtn.style.display    = type === 'sound'       ? '' : 'none';
-    if (bcfgBtn)    bcfgBtn.style.display    = type === 'button'      ? '' : 'none';
-    if (expireBtn)  expireBtn.style.display  = type === 'button'      ? '' : 'none';
-    if (doorCfgBtn) doorCfgBtn.style.display = type === 'door'        ? '' : 'none';
-    if (motCfgBtn)  motCfgBtn.style.display  = type === 'motion'      ? '' : 'none';
-    if (genCfgBtn)  genCfgBtn.style.display  = type === 'generic'     ? '' : 'none';
-    _syncDevsBtnIcon();
-  }
-
-  // Status panel: binary ring/text vs analog number vs gyro axes.
-  ws.statusRing.style.display    = analog           ? 'none' : '';
-  ws.statusText.style.display    = analog           ? 'none' : '';
-  ws.analogDisplay.style.display = analog && !isGyro ? ''    : 'none';
-  ws.gyroDisplay.style.display   = isGyro            ? ''    : 'none';
-
-  // Stats panel: binary counts vs analog min/max/avg vs gyro axes.
-  ws.statsBinary.style.display = analog           ? 'none' : '';
-  ws.statsAnalog.style.display = analog && !isGyro ? ''    : 'none';
-  ws.statsGyro.style.display   = isGyro            ? ''    : 'none';
-  // Holds/doubles tiles only apply to button devices.
-  const btnOnly = type === 'button';
-  if (ws.stHoldsTile)   ws.stHoldsTile.style.display   = btnOnly ? '' : 'none';
-  if (ws.stDoublesTile) ws.stDoublesTile.style.display = btnOnly ? '' : 'none';
-
-  // Chart legend only makes sense for binary types (shows active/inactive labels).
-  if (ws.chartLegend) {
+  if (wi.kind === 'status') {
+    if (ws.statusIconCont) ws.statusIconCont.innerHTML = iconSVG(prof.icon, 72);
+    ws.statusRing.style.display    = analog           ? 'none' : '';
+    ws.statusText.style.display    = analog           ? 'none' : '';
+    ws.analogDisplay.style.display = analog && !isGyro ? ''    : 'none';
+    ws.gyroDisplay.style.display   = isGyro            ? ''    : 'none';
+  } else if (wi.kind === 'event_counts') {
+    ws.statsBinary.style.display = analog           ? 'none' : '';
+    ws.statsAnalog.style.display = analog && !isGyro ? ''    : 'none';
+    ws.statsGyro.style.display   = isGyro            ? ''    : 'none';
+    const btnOnly = type === 'button';
+    if (ws.stHoldsTile)   ws.stHoldsTile.style.display   = btnOnly ? '' : 'none';
+    if (ws.stDoublesTile) ws.stDoublesTile.style.display = btnOnly ? '' : 'none';
+    // Buttons never send a "released" uplink — no report exists to count, so
+    // the tile would always be stuck at 0. Hide it rather than show a dead stat.
+    if (ws.stClosesTile)  ws.stClosesTile.style.display  = btnOnly ? 'none' : '';
+    if (dm) {
+      const la = dm.labelActive || 'ACTIVE', li = dm.labelInactive || 'INACTIVE';
+      if (ws.stOpensLbl)  ws.stOpensLbl.textContent  = la === 'OPEN' ? 'Opens' : la === 'ACTIVE' ? 'Triggers' : la + 's';
+      if (ws.stClosesLbl) ws.stClosesLbl.textContent = li === 'CLOSED' ? 'Closes' : li === 'INACTIVE' ? 'Clears' : li + 's';
+    }
+  } else if (wi.kind === 'chart') {
+    if (!ws.chartLegend) return;
     ws.chartLegend.style.display = analog ? 'none' : '';
     if (!analog && dm) {
       const la = dm.labelActive || 'ACTIVE', li = dm.labelInactive || 'INACTIVE';
@@ -2751,11 +2955,6 @@ function applyDeviceType(eui, type) {
           `<div class="legend-item"><div class="legend-pip" style="background:var(--c-open)"></div>${escHtml(la)}</div>`;
       }
     }
-  }
-
-  if (dm) {
-    dm.deviceType = type;
-    dm.isAnalog   = analog;
   }
 }
 
@@ -3166,16 +3365,17 @@ async function toggleTempUnit() {
       body: JSON.stringify({ unit: _tempUnitF ? 'F' : 'C' }),
     });
   } catch (_) {}
-  // Re-render the current selected device if it's a temperature sensor.
-  if (selectedEUI) {
-    const ds = deviceStates[selectedEUI];
-    const dm = deviceMeta[selectedEUI];
+  // Re-render every temperature sensor's widgets — the unit toggle is global.
+  Object.keys(deviceMeta).forEach(eui => {
+    const ds = deviceStates[eui];
+    const dm = deviceMeta[eui];
     if (ds && dm && dm.deviceType === 'temperature') {
-      updateAnalogStatus(selectedEUI, ds.lastRawValue, ds.lastUnit, ds.lastExtra || {});
-      updateStats(selectedEUI);
-      drawChart(selectedEUI);
+      updateAnalogStatus(eui, ds.lastRawValue, ds.lastUnit, ds.lastExtra || {});
+      updateRawValueWidget(eui, ds.lastRawValue, ds.lastUnit);
+      updateStats(eui);
+      drawChart(eui);
     }
-  }
+  });
 }
 
 // ── Button byte config dialog ──────────────────────────────────────────────
@@ -3361,6 +3561,55 @@ function wouldOverlap(exclude, colStart, colSpan, rowStart, rowSpan) {
   return false;
 }
 
+// ── Widget context menu ─────────────────────────────────────────────────────
+// Empty grid space → "Add Widget" (opens Configure in create mode, positioned
+// at the click). An existing widget → "Configure" / "Delete".
+const ctxMenu = document.getElementById('widget-ctx-menu');
+
+function showContextMenu(x, y, items) {
+  ctxMenu.innerHTML = '';
+  items.forEach(item => {
+    const li = document.createElement('li');
+    li.textContent = item.label;
+    if (item.danger) li.classList.add('danger');
+    li.addEventListener('click', () => { hideContextMenu(); item.onClick(); });
+    ctxMenu.appendChild(li);
+  });
+  ctxMenu.style.display = '';
+  // Clamp so the menu never renders off-screen.
+  const rect = ctxMenu.getBoundingClientRect();
+  const maxX = window.innerWidth  - rect.width  - 8;
+  const maxY = window.innerHeight - rect.height - 8;
+  ctxMenu.style.left = Math.max(8, Math.min(x, maxX)) + 'px';
+  ctxMenu.style.top  = Math.max(8, Math.min(y, maxY)) + 'px';
+}
+
+function hideContextMenu() { ctxMenu.style.display = 'none'; }
+
+document.addEventListener('click', hideContextMenu);
+document.addEventListener('scroll', hideContextMenu, true);
+window.addEventListener('blur', hideContextMenu);
+
+function attachWidgetContextMenu(el, widgetId) {
+  el.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    showContextMenu(e.clientX, e.clientY, [
+      { label: 'Configure', onClick: () => openWidgetConfigDialog(widgetId) },
+      { label: 'Delete', danger: true, onClick: () => confirmDeleteWidget(widgetId) },
+    ]);
+  });
+}
+
+dom.grid.addEventListener('contextmenu', e => {
+  if (e.target.closest('.widget')) return;   // handled by attachWidgetContextMenu instead
+  e.preventDefault();
+  const { col, row } = cellFromMouse(e);
+  showContextMenu(e.clientX, e.clientY, [
+    { label: 'Add Widget', onClick: () => openWidgetConfigDialog(null, { col, row }) },
+  ]);
+});
+
 // ── Drop ghost ─────────────────────────────────────────────────────────────
 const ghost = document.getElementById('drop-ghost');
 
@@ -3396,7 +3645,7 @@ dom.grid.addEventListener('dragover', e => {
   const c   = Math.min(Math.max(1, col - dragColOffset), GRID_COLS - dragColSpan + 1);
   const r   = Math.max(1, row - dragRowOffset);
   const bad = wouldOverlap(dragSrc, c, dragColSpan, r, dragRowSpan);
-  ghost.style.display    = '';
+  ghost.style.display    = 'block';
   ghost.style.gridColumn = `${c} / span ${dragColSpan}`;
   ghost.style.gridRow    = `${r} / span ${dragRowSpan}`;
   ghost.classList.toggle('invalid', bad);
@@ -3444,7 +3693,7 @@ function attachResizeListener(widget) {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup',   onUp);
       saveLayout();
-      if (selectedEUI) drawChart(selectedEUI);
+      redrawAllCharts();
     }
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup',   onUp);
@@ -3452,47 +3701,17 @@ function attachResizeListener(widget) {
 }
 
 // ── Layout persistence ─────────────────────────────────────────────────────
-// Widget positions are saved to localStorage keyed by device EUI so each
-// device remembers its own layout independently.
-const DEFAULT_DEVICE_LAYOUT = [
-  { key: 'wStatus', col: '1 / span 8',   row: '1 / span 8' },
-  { key: 'wStats',  col: '9 / span 6',   row: '1 / span 8' },
-  { key: 'wChart',  col: '15 / span 10', row: '1 / span 8' },
-  { key: 'wLog',    col: '1 / span 24',  row: '9 / span 8' },
-];
-
-function applyDeviceLayout(eui) {
-  if (isMobile()) return;
-  const ws = deviceWidgets[eui];
-  if (!ws) return;
-  const raw = localStorage.getItem(LAYOUT_KEY);
-  // Inline safe-parse: returns {} if the stored string is missing or corrupt.
-  const all = raw ? (() => { try { return JSON.parse(raw); } catch(_){return {};} })() : {};
-  const devL = all[eui] || {};
-
-  const map = { wStatus: ws.wStatus, wStats: ws.wStats, wChart: ws.wChart, wLog: ws.wLog };
-  DEFAULT_DEVICE_LAYOUT.forEach(({ key, col, row }) => {
-    const w   = map[key];
-    const cfg = devL[key] || {};
-    w.style.gridColumn = cfg.col || col;
-    w.style.gridRow    = cfg.row || row;
-  });
-}
-
+// Each widget's own col/row lives in its entry in `widgets`, persisted via
+// WidgetStore (server-side per Google account, or localStorage as a
+// fallback) — see the drag/resize handlers below for where this is called.
 function saveLayout() {
-  const raw = localStorage.getItem(LAYOUT_KEY);
-  const all = raw ? (() => { try { return JSON.parse(raw); } catch(_){return {};} })() : {};
-
-  Object.keys(deviceWidgets).forEach(eui => {
-    const ws = deviceWidgets[eui];
-    all[eui] = {
-      wStatus: { col: ws.wStatus.style.gridColumn, row: ws.wStatus.style.gridRow },
-      wStats:  { col: ws.wStats.style.gridColumn,  row: ws.wStats.style.gridRow  },
-      wChart:  { col: ws.wChart.style.gridColumn,  row: ws.wChart.style.gridRow  },
-      wLog:    { col: ws.wLog.style.gridColumn,    row: ws.wLog.style.gridRow    },
-    };
+  document.querySelectorAll('.widget').forEach(el => {
+    const id = el.dataset.widgetId;
+    if (!id) return;
+    const def = widgets.find(w => w.id === id);
+    if (def) { def.col = el.style.gridColumn; def.row = el.style.gridRow; }
   });
-  localStorage.setItem(LAYOUT_KEY, JSON.stringify(all));
+  WidgetStore.save(widgets);
 }
 
 // ── 1-second ticker ────────────────────────────────────────────────────────
@@ -3500,7 +3719,7 @@ function saveLayout() {
 // sensor events arrive.
 setInterval(() => {
   updateStatsDuration();
-  if (selectedEUI) drawChart(selectedEUI);
+  redrawAllCharts();
 }, 1000);
 
 // ── Grid layout engine ─────────────────────────────────────────────────────
@@ -3544,7 +3763,7 @@ function applyScale(pct) {
     dom.grid.style.zoom   = '';
     dom.appBar.style.zoom = '';
     syncGridRows();
-    if (selectedEUI) drawChart(selectedEUI);
+    redrawAllCharts();
     return;
   }
   currentScale               = pct / 100;
@@ -3552,7 +3771,7 @@ function applyScale(pct) {
   dom.appBar.style.zoom      = currentScale;
   dom.scaleLabel.textContent = pct + '%';
   syncGridRows();
-  if (selectedEUI) drawChart(selectedEUI);
+  redrawAllCharts();
   localStorage.setItem(SCALE_KEY, pct);
 }
 
@@ -3568,7 +3787,7 @@ window.addEventListener('resize', () => {
     currentScale = 1;
   }
   syncGridRows();
-  if (selectedEUI) drawChart(selectedEUI);
+  redrawAllCharts();
 });
 
 // ── Log export ─────────────────────────────────────────────────────────────
@@ -3765,6 +3984,103 @@ async function confirmDeleteDevice() {
 
 delDialog.addEventListener('click', e => { if (e.target === delDialog) closeDeleteDialog(); });
 
+// ── Configure Widget dialog ─────────────────────────────────────────────────
+const wcfgDialog = document.getElementById('widget-config-dialog');
+let currentWidgetConfigId = null;   // set when editing an existing widget; null when creating
+let pendingWidgetCreatePos = null;  // {col, row} from the right-click that opened "Add Widget"
+
+function populateWidgetDeviceSelect(selected) {
+  const sel = document.getElementById('wcfg-device');
+  const euis = Object.keys(deviceMeta).sort((a, b) => (deviceMeta[a].name || a).localeCompare(deviceMeta[b].name || b));
+  sel.innerHTML = '<option value="">— no device —</option>' +
+    euis.map(eui => `<option value="${eui}">${escHtml(deviceMeta[eui].name || eui)}</option>`).join('');
+  sel.value = selected || '';
+}
+
+function openWidgetConfigDialog(widgetId, createPos) {
+  currentWidgetConfigId  = widgetId || null;
+  pendingWidgetCreatePos = createPos || null;
+  document.getElementById('wcfg-msg').className   = 'dialog-msg';
+  document.getElementById('wcfg-msg').textContent = '';
+
+  if (widgetId) {
+    const def = widgets.find(w => w.id === widgetId);
+    if (!def) return;
+    document.getElementById('wcfg-title').textContent = 'Configure Widget';
+    document.getElementById('wcfg-name').value  = def.title || '';
+    document.getElementById('wcfg-kind').value  = def.kind;
+    document.getElementById('wcfg-delete-btn').style.display = '';
+    populateWidgetDeviceSelect(def.devEUI);
+  } else {
+    document.getElementById('wcfg-title').textContent = 'Add Widget';
+    document.getElementById('wcfg-name').value = '';
+    document.getElementById('wcfg-kind').value = 'status';
+    document.getElementById('wcfg-delete-btn').style.display = 'none';
+    populateWidgetDeviceSelect('');
+  }
+  wcfgDialog.showModal();
+}
+
+function closeWidgetConfigDialog() { wcfgDialog.close(); }
+
+function submitWidgetConfig() {
+  const name   = document.getElementById('wcfg-name').value.trim();
+  const kind   = document.getElementById('wcfg-kind').value;
+  const devEUI = document.getElementById('wcfg-device').value || null;
+
+  if (currentWidgetConfigId) {
+    const def = widgets.find(w => w.id === currentWidgetConfigId);
+    if (!def) { closeWidgetConfigDialog(); return; }
+    removeWidgetInstance(def.id);   // drop old DOM; col/row stay on `def`
+    def.title  = name;
+    def.kind   = kind;
+    def.devEUI = devEUI;
+    renderWidget(def);
+  } else {
+    const pos = pendingWidgetCreatePos || { col: 1, row: 1 };
+    const def = {
+      id:     'w-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7),
+      kind, title: name, devEUI,
+      col: `${pos.col} / span 8`,
+      row: `${pos.row} / span 6`,
+    };
+    widgets.push(def);
+    renderWidget(def);
+  }
+  WidgetStore.save(widgets);
+  closeWidgetConfigDialog();
+}
+
+wcfgDialog.addEventListener('click', e => { if (e.target === wcfgDialog) closeWidgetConfigDialog(); });
+
+// ── Delete Widget dialog ────────────────────────────────────────────────────
+const delWidgetDialog = document.getElementById('delete-widget-dialog');
+let widgetPendingDelete = null;
+
+function confirmDeleteWidget(widgetId) {
+  if (!widgetId) return;
+  if (wcfgDialog.open) wcfgDialog.close();
+  widgetPendingDelete = widgetId;
+  const def = widgets.find(w => w.id === widgetId);
+  document.getElementById('delete-widget-prompt').textContent =
+    `Delete "${def?.title || widgetKindMeta(def?.kind).label}"?`;
+  delWidgetDialog.showModal();
+}
+
+function closeDeleteWidgetDialog() { widgetPendingDelete = null; delWidgetDialog.close(); }
+
+function doDeleteWidget() {
+  const id = widgetPendingDelete;
+  if (id) {
+    removeWidgetInstance(id);
+    widgets = widgets.filter(w => w.id !== id);
+    WidgetStore.save(widgets);
+  }
+  closeDeleteWidgetDialog();
+}
+
+delWidgetDialog.addEventListener('click', e => { if (e.target === delWidgetDialog) closeDeleteWidgetDialog(); });
+
 // ── Boot sequence ──────────────────────────────────────────────────────────
 // Restore zoom level first so the grid calculates the right column count
 // before widgets are placed. Fetch byte configs before opening SSE so the
@@ -3772,7 +4088,6 @@ delDialog.addEventListener('click', e => { if (e.target === delDialog) closeDele
 const savedPct = parseInt(localStorage.getItem(SCALE_KEY) || '100');
 document.getElementById('scale-slider').value = savedPct;
 applyScale(savedPct);
-dom.noDevMsg.style.display = '';
 fetchTiltByteConfig();
 fetchTempByteConfig();
 fetchButtonByteConfig();
@@ -3783,6 +4098,12 @@ fetchGenericByteConfig();
 fetchTempUnit();
 connect();
 _fetchCurrentUser();
+
+WidgetStore.load().then(list => {
+  widgets = list || [];
+  widgetsReady = true;
+  maybeRenderWidgets();
+});
 
 async function _fetchCurrentUser() {
   try {
