@@ -21,8 +21,11 @@ The script tries multiple write paths in order:
 If everything is blocked it prints manual web-UI steps.
 """
 
-import base64, hashlib, http.cookiejar, json, os, struct, ssl, sys, time
+import base64, http.cookiejar, json, os, struct, ssl, sys, time
 import urllib.error, urllib.request
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import padding as sym_padding
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
 
@@ -48,7 +51,6 @@ _load_dotenv(os.path.join(DIR, ".env"))
 GW_HOST      = os.environ.get("GW_HOST",      "192.168.1.1")
 GW_EMAIL     = os.environ.get("GW_EMAIL",     "admin")
 GW_PASS      = os.environ.get("GW_PASS",      "")
-GW_PASS_HASH = os.environ.get("GW_PASS_HASH", "")
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "").rstrip("/")
 API_KEY       = os.environ.get("API_KEY",      "")
 GATEWAY_ID    = os.environ.get("GATEWAY_ID",  "ug65")
@@ -68,8 +70,14 @@ opener = urllib.request.build_opener(
 
 # ── ChirpStack REST helpers ───────────────────────────────────────────────────
 
-def _md5_b64(s):
-    return base64.b64encode(hashlib.md5(s.encode()).digest()).decode()
+def _aes_enc(plaintext):
+    """AES-CBC with the UG65's fixed key/iv — same encoding the web UI's own
+    CGI login and (per js/login.js) ChirpStack internal/login both use."""
+    key, iv = b"1111111111111111", b"2222222222222222"
+    padder  = sym_padding.PKCS7(128).padder()
+    padded  = padder.update(plaintext.encode()) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    return base64.b64encode(encryptor.update(padded) + encryptor.finalize()).decode()
 
 
 def _cs_request(method, path, body=None, token=None, extra_headers=None):
@@ -92,9 +100,8 @@ def _cs_request(method, path, body=None, token=None, extra_headers=None):
 
 
 def _cs_login():
-    pw_hash = GW_PASS_HASH if GW_PASS_HASH else _md5_b64(GW_PASS)
     status, resp = _cs_request("POST", "internal/login",
-                                {"username": GW_EMAIL, "password": pw_hash})
+                                {"username": GW_EMAIL, "password": _aes_enc(GW_PASS)})
     if status == 200 and "jwt" in resp:
         return resp["jwt"]
     raise RuntimeError(f"ChirpStack login failed ({status}): {resp}")
@@ -102,22 +109,7 @@ def _cs_login():
 
 # ── CGI API helpers ───────────────────────────────────────────────────────────
 
-try:
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    from cryptography.hazmat.primitives import padding as sym_padding
-    _HAS_CRYPTO = True
-except ImportError:
-    _HAS_CRYPTO = False
-
 _cgi_id = [1]
-
-def _cgi_encrypt(pt):
-    k, iv = b"1111111111111111", b"2222222222222222"
-    padder = sym_padding.PKCS7(128).padder()
-    padded = padder.update(pt.encode()) + padder.finalize()
-    cipher = Cipher(algorithms.AES(k), modes.CBC(iv))
-    enc = cipher.encryptor()
-    return base64.b64encode(enc.update(padded) + enc.finalize()).decode()
 
 
 def _cgi(core, func, vals=None):
@@ -141,13 +133,9 @@ def _cgi(core, func, vals=None):
 
 
 def _cgi_login():
-    if not _HAS_CRYPTO:
-        print("WARNING: 'cryptography' package not installed; CGI login skipped.")
-        print("  Install with:  pip install cryptography")
-        return False
     cgi_pass = GW_PASS if GW_PASS else "p0ssw0rd;"
     r = _cgi("user", "login",
-             [{"username": GW_EMAIL, "password": _cgi_encrypt(cgi_pass)}])
+             [{"username": GW_EMAIL, "password": _aes_enc(cgi_pass)}])
     return r.get("status") == 0
 
 
