@@ -1,8 +1,8 @@
 # ahlora
-A WIP dashboard that sends IoT data over a DFLoRaWAN Gateway.
+A WIP dashboard that sends IoT data over a DFLoRaWAN or Milesight UG65 Gateway.
 The primary goal of this project is to gain experience with IoT and Postgres workflows and make a dashboard that can be deployed on a dedicated platform like Railway or Render. It's coded primarily by AI and is not certified for secure use in enterprise environments, though I'd say is perfectly cromulent for a local connection or a VPN connection through wireguard, tailscale, and whatever else tickles your fancy.
 
-The site supports mobile and desktop scaling, PWA, and a for the most part functioning server data polling system that uses an API key to secure it's data. The variable is set as seen in the .env.example file. The postgres database url is also set in the .env file, as seen in the example along with the API key
+The site supports mobile and desktop scaling, PWA, and a for the most part functioning server data polling system that uses an API key to secure it's data. The variable is set as seen in the .env.example file. The postgres database url is also set in the .env file, as seen in the example along with the API key.
 
 # Implemented Features
 ## PostgreSQL Table Viewer
@@ -26,10 +26,11 @@ This method will probably need to be updated in the future for newer firmware re
 The device_classifier.py has not been thoroughly tested, if the correct device type does not appear when an EUID is imported, then simply change the dropdown selection to a device type that most similarly aligns with the device type. To properly configure your device, check the hexadecimal values that your LoRaWAN compatible device sends and set the placements (offsets) of the values in the byte offset menu. The script by default will guess based on the text content of the device name.
 
 ## Sound Sensors
-Sound Devices are in testing and have not been properly configured, do not use for production environments.
+Sound Devices are in testing and have not been properly configured, currently it is only tested with Milesight WS302 and takes average db data. In any case, using the byte offset will allow any sensor to work theoretically, it just hasn't been given the time it deserves.
 
 # Planned Features/Roadmap
-## N/A
+## UI Customization
+As of right now, the UI can be configured with a specific device selected, but I'd rather have a dashboard that can have data from multiple devices visible at once. Testing of the new UI can be found on the UI-Custom branch
 
 # Dependencies 
-psycopg2, postgresql, a computer??????
+psycopg2, postgresql, cryptography, a computer??????
