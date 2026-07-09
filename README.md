@@ -9,7 +9,7 @@ The site supports mobile and desktop scaling, PWA, and a for the most part funct
 Having a table viewer built into the dashboard makes it easier to see what the logs look like from the database POV instead of a simple event viewer. This would allow for other developers to extract data from the dashboard and implement the data in other scripts. This is especially of use for those that like to script event based actions, like turning a light on when pressing a button, or kicking up their AC if the temperature in a specific room is different from the rest of their house (so most AC units).
 
 ## Certification Checks and Encryption
-traffic is encoded with 256 bit AES keys and is sent securely by a user defined API_Key. Their is also a customizable BROWSER_PASSWORD variable that asks the client for a password to access the site. Though note that if a BROWSER_PASSWORD is used, OAuth will be disabled.
+Traffic is sent securely by a user defined API_KEY. Their is also a customizable BROWSER_PASSWORD variable that asks the client for a password to access the site. Though note that if a BROWSER_PASSWORD is used, OAuth will be disabled.
 
 ## User Account Control (OAuth)
 Using OAuth from Google's APIs, there is now email login support as well as a variable based whitelist for access. By default the entire site is blocked until the user logs in, but even after login, all hidden files and scripts cannot be accessed remotely.
