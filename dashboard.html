@@ -153,6 +153,18 @@
     /* ── Auth button (top-right, row 1) ─────────────────────────────────── */
     .app-bar-r1-spacer { flex: 1; min-width: 8px; }
 
+    /* ── Clock (left of Google sign-in) ──────────────────────────────────── */
+    .app-bar-clock {
+      font-family: inherit;
+      font-size: 13px; font-weight: 500;
+      color: var(--md-on-surface-variant);
+      background: var(--md-surf-high);
+      border-radius: 20px;
+      padding: 6px 14px;
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+    }
+
     .auth-signin-btn {
       display: flex; align-items: center; gap: 8px;
       background: var(--md-primary-container);
@@ -597,7 +609,8 @@
       .conn-pill { padding: 6px; gap: 0; }
       .app-bar-title { font-size: 17px; }
       .app-bar-subtitle,
-      .scale-control { display: none; }
+      .scale-control,
+      .app-bar-clock { display: none; }
 
       /* Auth button: avatar + logout only on mobile (hide name) */
       .auth-signin-label { display: none; }
@@ -879,6 +892,8 @@
   </div>
   <div class="app-bar-title">LoRaWAN Dashboard</div>
   <div class="app-bar-r1-spacer"></div>
+
+  <div class="app-bar-clock" id="app-bar-clock">--:--:--</div>
 
   <!-- Auth button (top-right of row 1) -->
   <div class="auth-btn-wrap" id="auth-btn-wrap">
@@ -3215,13 +3230,22 @@ function saveLayout() {
   WidgetStore.save(widgets);
 }
 
+// Live clock in the app bar, left of the Google sign-in button.
+function updateAppBarClock() {
+  document.getElementById('app-bar-clock').textContent = new Date().toLocaleTimeString('en-US', {
+    hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+}
+
 // ── 1-second ticker ────────────────────────────────────────────────────────
 // Keeps "state age" timers and the rolling chart current even when no new
 // sensor events arrive.
 setInterval(() => {
   updateStatsDuration();
   redrawAllCharts();
+  updateAppBarClock();
 }, 1000);
+updateAppBarClock();   // paint immediately instead of waiting a full second for the first tick
 
 // ── Grid layout engine ─────────────────────────────────────────────────────
 // Recalculates how many columns/rows the CSS grid needs to fill the viewport
