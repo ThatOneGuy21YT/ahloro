@@ -9,7 +9,7 @@ The site supports mobile and desktop scaling, PWA, and a for the most part funct
 Having a table viewer built into the dashboard makes it easier to see what the logs look like from the database POV instead of a simple event viewer. This would allow for other developers to extract data from the dashboard and implement the data in other scripts. This is especially of use for those that like to script event based actions, like turning a light on when pressing a button, or kicking up their AC if the temperature in a specific room is different from the rest of their house (so most AC units).
 
 ## Certification Checks and Encryption
-traffic is encoded with 256 bit AES keys and is sent securely by a user defined API_Key. Their is also a customizable BROWSER_PASSWORD variable that asks the client for a password to access the site. Though note that if a BROWSER_PASSWORD is used, OAuth will be disabled.
+Traffic is sent securely by a user defined API_KEY. Their is also a customizable BROWSER_PASSWORD variable that asks the client for a password to access the site. Though note that if a BROWSER_PASSWORD is used, OAuth will be disabled.
 
 ## User Account Control (OAuth)
 Using OAuth from Google's APIs, there is now email login support as well as a variable based whitelist for access. By default the entire site is blocked until the user logs in, but even after login, all hidden files and scripts cannot be accessed remotely.
@@ -28,9 +28,11 @@ The device_classifier.py has not been thoroughly tested, if the correct device t
 ## Sound Sensors
 Sound Devices are in testing and have not been properly configured, currently it is only tested with Milesight WS302 and takes average db data. In any case, using the byte offset will allow any sensor to work theoretically, it just hasn't been given the time it deserves.
 
-# Planned Features/Roadmap
 ## UI Customization
-As of right now, the UI can be configured with a specific device selected, but I'd rather have a dashboard that can have data from multiple devices visible at once. Testing of the new UI can be found on the UI-Custom branch
+An overhaul of the widget and configuration system has been made for both mobile and desktop that allows for custom layouts and information that can be organized however looks good to the user. You can move, resize, and even toggle most aspects of the widget UI, allowing the user to get just as much information as they choose to have visible. With these updates, configuration has been moved to a right-click context menu. Right clicking a widget lets you select the active device, the widget type, and whether the data is the last 24hrs from postgresql. Right-clicking a device in the new devices page allows you to configure byte offsets and anything that was originally done in the titlebar. To add a new device or add a new widget in the devices and dashboard pages respectively, simply right-click on empty space and select the add button.
+
+# Planned Features/Roadmap
+## N/A
 
 # Dependencies 
 psycopg2, postgresql, cryptography, a computer??????

@@ -69,142 +69,87 @@ _EUI_OVERRIDES: dict[str, str] = {
 _TEMP_HIGH_C    = 30.0    # above this → value=0 (HIGH)
 _TILT_THRESHOLD = 15.0    # degrees from vertical → value=0 (TILTED)
 
-# ── Tilt/gyro byte offsets (configurable at runtime) ──────────────────────────
-# Each offset is the start byte for a little-endian signed int16 (reads 2 bytes).
-_tilt_byte_offsets: dict[str, int] = {"x": 5, "y": 7, "z": 9}
-
-
-def get_tilt_byte_config() -> dict[str, int]:
-    """Return the current {x, y, z} start-byte offsets for the tilt decoder."""
-    return dict(_tilt_byte_offsets)
-
-
-def set_tilt_byte_config(x: int, y: int, z: int) -> None:
-    """Update the tilt decoder byte offsets at runtime."""
-    _tilt_byte_offsets["x"] = int(x)
-    _tilt_byte_offsets["y"] = int(y)
-    _tilt_byte_offsets["z"] = int(z)
-
-
-# ── Temp/humidity byte config (configurable at runtime) ───────────────────────
-# Calibrated to Cayenne LPP format (DFRobot environment sensor):
-#   temp : bytes 2-3, LE signed int16, ÷10  → °C
-#   humid: byte  6,   uint8,           ÷2   → %
-_temp_byte_config: dict = {
-    "temp_start":    2,      # start byte of temperature field
-    "temp_divisor":  10.0,   # divide raw temp int by this to get °C
-    "humid_start":   6,      # start byte of humidity field
-    "humid_size":    1,      # bytes to read for humidity: 1 (uint8) or 2 (uint16)
-    "humid_divisor": 2.0,    # divide raw humid int by this to get %
-    "little_endian": True,   # byte order for all multi-byte fields
+# ── Per-device configuration ──────────────────────────────────────────────────
+# Byte offsets, endianness, and type-specific tuning (button hold/double/
+# expiry, temp display unit) are all per-device, keyed by devEUI — two devices
+# of the same type can be wired or calibrated differently. _DEFAULT_CONFIGS is
+# the fallback for any field a given device hasn't overridden yet.
+_DEFAULT_CONFIGS: dict[str, dict] = {
+    TILT: {
+        "x": 5, "y": 7, "z": 9,   # start byte per axis, signed int16
+        "little_endian": True,
+    },
+    TEMPERATURE: {
+        "temp_start":    2,      # start byte of temperature field
+        "temp_divisor":  10.0,   # divide raw temp int by this to get °C
+        "humid_start":   6,      # start byte of humidity field
+        "humid_size":    1,      # bytes to read for humidity: 1 (uint8) or 2 (uint16)
+        "humid_divisor": 2.0,    # divide raw humid int by this to get %
+        "little_endian": True,   # byte order for all multi-byte fields
+        "unit":          "C",    # display unit: "C" or "F"
+    },
+    SOUND: {
+        # Default: bytes 8-9 as little-endian uint16, dB×10 encoding.
+        # Derived from live DFRobot Sound Sensor payloads (devEUI 24E124743C210453):
+        # e.g. 017564055B052102A3012102 -> bytes[8:10] LE = 0x01A3 = 419 -> 41.9 dB.
+        "start":         8,      # start byte of sound field
+        "size":          2,      # bytes to read: 1 (uint8) or 2 (uint16)
+        "divisor":       10.0,   # divide raw int by this to get dB (dB×10 → divisor 10)
+        "little_endian": True,   # byte order for 2-byte reads
+        "loud_db":       60.0,   # dB threshold above which is LOUD (value=0)
+    },
+    BUTTON: {
+        "check_byte":     -1,   # which byte to inspect; -1 means last byte of payload
+        "hold_value":      2,   # byte value that indicates a held press vs a normal press
+        "double_value":    3,   # byte value that indicates a double press
+        "expire_seconds":  1.0, # seconds PRESSED stays displayed before auto-reverting
+    },
+    DOOR:    {"check_byte": 0},   # non-zero → OPEN (value=0), zero → CLOSED (value=1)
+    MOTION:  {"check_byte": 5},   # non-zero → DETECTED (value=0), zero → CLEAR (value=1)
+    GENERIC: {"check_byte": 5},   # non-zero → ACTIVE (value=0), zero → INACTIVE (value=1)
 }
 
-
-def get_temp_byte_config() -> dict:
-    """Return the current temp/humidity byte configuration."""
-    return dict(_temp_byte_config)
+# devEUI -> override fields (only keys that differ from _DEFAULT_CONFIGS[type])
+_device_configs: dict[str, dict] = {}
 
 
-def set_temp_byte_config(temp_start: int, temp_divisor: float,
-                         humid_start: int, humid_size: int,
-                         humid_divisor: float, little_endian: bool) -> None:
-    """Update the temp/humidity decoder configuration at runtime."""
-    _temp_byte_config["temp_start"]    = int(temp_start)
-    _temp_byte_config["temp_divisor"]  = float(temp_divisor)
-    _temp_byte_config["humid_start"]   = int(humid_start)
-    _temp_byte_config["humid_size"]    = int(humid_size)
-    _temp_byte_config["humid_divisor"] = float(humid_divisor)
-    _temp_byte_config["little_endian"] = bool(little_endian)
+def get_device_config(dev_eui: str, device_type: str) -> dict:
+    """Merged config for one device: its type's defaults, overridden by
+    whatever fields this specific devEUI has customized."""
+    merged = dict(_DEFAULT_CONFIGS.get(device_type, {}))
+    merged.update(_device_configs.get(dev_eui.upper(), {}))
+    return merged
 
 
-# ── Sound byte config (configurable at runtime) ──────────────────────────────
-# Default: bytes 8-9 as little-endian uint16, dB×10 encoding (divisor=10).
-# Derived from live DFRobot Sound Sensor payloads (devEUI 24E124743C210453):
-# e.g. 017564055B052102A3012102 -> bytes[8:10] LE = 0x01A3 = 419 -> 41.9 dB,
-# matching the sensor's actual LAeq reading at capture time (~40-42 dB).
-_sound_byte_config: dict = {
-    "start":         8,      # start byte of sound field
-    "size":          2,      # bytes to read: 1 (uint8) or 2 (uint16)
-    "divisor":       10.0,   # divide raw int by this to get dB (dB×10 → divisor 10)
-    "little_endian": True,   # byte order for 2-byte reads
-    "loud_db":       60.0,   # dB threshold above which is LOUD (value=0)
-}
+def set_device_config(dev_eui: str, device_type: str, fields: dict) -> dict:
+    """Validate `fields` against the keys/types _DEFAULT_CONFIGS defines for
+    `device_type`, store them as this device's overrides, and return the
+    newly merged config. Keys that aren't part of that type's schema are
+    silently ignored rather than rejected, so saving after switching a
+    device's type doesn't require the caller to strip irrelevant fields."""
+    schema = _DEFAULT_CONFIGS.get(device_type, {})
+    eui = dev_eui.upper()
+    overrides = _device_configs.setdefault(eui, {})
+    for key, default_val in schema.items():
+        if key not in fields:
+            continue
+        value = fields[key]
+        if isinstance(default_val, bool):
+            overrides[key] = bool(value)
+        elif isinstance(default_val, int):
+            overrides[key] = int(value)
+        elif isinstance(default_val, float):
+            overrides[key] = float(value)
+        else:
+            overrides[key] = str(value)
+    return get_device_config(eui, device_type)
 
 
-def get_sound_byte_config() -> dict:
-    return dict(_sound_byte_config)
-
-
-def set_sound_byte_config(start: int, size: int, divisor: float,
-                          little_endian: bool, loud_db: float) -> None:
-    _sound_byte_config["start"]         = int(start)
-    _sound_byte_config["size"]          = int(size)
-    _sound_byte_config["divisor"]       = float(divisor)
-    _sound_byte_config["little_endian"] = bool(little_endian)
-    _sound_byte_config["loud_db"]       = float(loud_db)
-
-
-# ── Button byte config (configurable at runtime) ──────────────────────────────
-# By default, reads the last byte of the payload (-1 index).
-# A value of 0 = released; non-zero = pressed; hold_value = held.
-_button_byte_config: dict = {
-    "check_byte":   -1,  # which byte to inspect; -1 means last byte of payload
-    "hold_value":    2,  # byte value that indicates a held press vs a normal press
-    "double_value":  3,  # byte value that indicates a double press
-}
-
-
-def get_button_byte_config() -> dict:
-    """Return the current button press/hold/double byte configuration."""
-    return dict(_button_byte_config)
-
-
-def set_button_byte_config(check_byte: int, hold_value: int, double_value: int = 3) -> None:
-    """Update the button decoder configuration at runtime."""
-    _button_byte_config["check_byte"]   = int(check_byte)
-    _button_byte_config["hold_value"]   = int(hold_value)
-    _button_byte_config["double_value"] = int(double_value)
-
-
-# ── Door byte config (configurable at runtime) ────────────────────────────────
-# Reads one byte; non-zero → OPEN (value=0), zero → CLOSED (value=1).
-_door_byte_config: dict = {"check_byte": 0}
-
-
-def get_door_byte_config() -> dict:
-    return dict(_door_byte_config)
-
-
-def set_door_byte_config(check_byte: int) -> None:
-    _door_byte_config["check_byte"] = int(check_byte)
-
-
-# ── Motion byte config (configurable at runtime) ──────────────────────────────
-# Reads one byte; non-zero → DETECTED (value=0), zero → CLEAR (value=1).
-# Default 5 matches the legacy _decode_binary_generic behaviour.
-_motion_byte_config: dict = {"check_byte": 5}
-
-
-def get_motion_byte_config() -> dict:
-    return dict(_motion_byte_config)
-
-
-def set_motion_byte_config(check_byte: int) -> None:
-    _motion_byte_config["check_byte"] = int(check_byte)
-
-
-# ── Generic byte config (configurable at runtime) ─────────────────────────────
-# Reads one byte; non-zero → ACTIVE (value=0), zero → INACTIVE (value=1).
-# Default 5 matches the legacy _decode_binary_generic behaviour.
-_generic_byte_config: dict = {"check_byte": 5}
-
-
-def get_generic_byte_config() -> dict:
-    return dict(_generic_byte_config)
-
-
-def set_generic_byte_config(check_byte: int) -> None:
-    _generic_byte_config["check_byte"] = int(check_byte)
+def load_device_config(dev_eui: str, config: dict) -> None:
+    """Seed a device's stored overrides at startup — trusted data already
+    validated when it was originally saved via set_device_config, so no
+    re-validation here."""
+    _device_configs[dev_eui.upper()] = dict(config)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -250,23 +195,25 @@ def decode_payload(device_type: str, dev_eui: str, raw_hex: str) -> dict:
     except ValueError:
         return result
 
+    cfg = get_device_config(dev_eui, device_type)
+
     if device_type == DOOR:
-        _decode_binary_check(data, result, _door_byte_config["check_byte"])
+        _decode_binary_check(data, result, cfg["check_byte"])
     elif device_type == MOTION:
-        _decode_binary_check(data, result, _motion_byte_config["check_byte"])
+        _decode_binary_check(data, result, cfg["check_byte"])
     elif device_type == BUTTON:
-        _decode_button(data, result)
+        _decode_button(data, result, cfg)
     elif device_type == TEMPERATURE:
         result["unit"] = "°C"
-        _decode_temperature(data, result)
+        _decode_temperature(data, result, cfg)
     elif device_type == SOUND:
         result["unit"] = "dB"
-        _decode_sound(data, result)
+        _decode_sound(data, result, cfg)
     elif device_type == TILT:
         result["unit"] = "°"
-        _decode_tilt(data, result)
+        _decode_tilt(data, result, cfg)
     elif device_type == GENERIC:
-        _decode_binary_check(data, result, _generic_byte_config["check_byte"])
+        _decode_binary_check(data, result, cfg["check_byte"])
     else:
         _decode_binary_generic(data, result)
 
@@ -314,7 +261,7 @@ def _decode_binary_generic(data: bytes, r: dict) -> None:
         r["value"] = 0 if data[-1] != 0 else 1
 
 
-def _decode_button(data: bytes, r: dict) -> None:
+def _decode_button(data: bytes, r: dict, cfg: dict) -> None:
     """
     Read the configured check_byte (-1 = last byte).
     0            → released     (value=1)
@@ -322,7 +269,6 @@ def _decode_button(data: bytes, r: dict) -> None:
     hold_value   → held         (value=0, extra["held"]=True)
     double_value → double press (value=0, extra["double"]=True)
     """
-    cfg = _button_byte_config
     try:
         byte_val = data[cfg["check_byte"]]
     except IndexError:
@@ -337,14 +283,13 @@ def _decode_button(data: bytes, r: dict) -> None:
             r["extra"]["double"] = True
 
 
-def _decode_temperature(data: bytes, r: dict) -> None:
+def _decode_temperature(data: bytes, r: dict, cfg: dict) -> None:
     """
-    Decode temperature and optional humidity using the runtime _temp_byte_config.
+    Decode temperature and optional humidity using this device's config.
     Default (Cayenne LPP / DFRobot environment sensor):
       temp_start=2, temp_divisor=10, little_endian=True  → LE int16 ÷ 10 = °C
       humid_start=6, humid_size=1, humid_divisor=2       → uint8 ÷ 2 = %
     """
-    cfg = _temp_byte_config
     ts  = cfg["temp_start"]
     fmt = "<h" if cfg["little_endian"] else ">h"
 
@@ -372,8 +317,7 @@ def _decode_temperature(data: bytes, r: dict) -> None:
             pass
 
 
-def _decode_sound(data: bytes, r: dict) -> None:
-    cfg  = _sound_byte_config
+def _decode_sound(data: bytes, r: dict, cfg: dict) -> None:
     s    = cfg["start"]
     size = cfg["size"]
     if len(data) < s + size:
@@ -391,22 +335,24 @@ def _decode_sound(data: bytes, r: dict) -> None:
         pass
 
 
-def _decode_tilt(data: bytes, r: dict) -> None:
+def _decode_tilt(data: bytes, r: dict, cfg: dict) -> None:
     """
     DFRobot LoRaWAN gyroscope/tilt sensor:
-      bytes 5-6 : X angle, signed int16 little-endian, /100 = degrees
-      bytes 7-8 : Y angle, signed int16 little-endian, /100 = degrees
-      bytes 9-10: Z angle, signed int16 little-endian, /100 = degrees
+      bytes 5-6 : X angle, signed int16, /100 = degrees
+      bytes 7-8 : Y angle, signed int16, /100 = degrees
+      bytes 9-10: Z angle, signed int16, /100 = degrees
+    (byte order per-device, defaults to little-endian)
 
     raw_value is None; caller reads angles from extra {x, y, z}.
     value=0 (TILTED) when horizontal deviation exceeds threshold.
     """
-    ox, oy, oz = _tilt_byte_offsets["x"], _tilt_byte_offsets["y"], _tilt_byte_offsets["z"]
+    ox, oy, oz = cfg["x"], cfg["y"], cfg["z"]
+    fmt = "<h" if cfg.get("little_endian", True) else ">h"
     if len(data) >= max(ox, oy, oz) + 2:
         try:
-            x_deg = struct.unpack_from("<h", data, ox)[0] / 100.0
-            y_deg = struct.unpack_from("<h", data, oy)[0] / 100.0
-            z_deg = struct.unpack_from("<h", data, oz)[0] / 100.0
+            x_deg = struct.unpack_from(fmt, data, ox)[0] / 100.0
+            y_deg = struct.unpack_from(fmt, data, oy)[0] / 100.0
+            z_deg = struct.unpack_from(fmt, data, oz)[0] / 100.0
 
             r["raw_value"] = None
             r["extra"] = {
@@ -436,8 +382,10 @@ def _classify_by_payload(raw_hex: str) -> str | None:
 
     n = len(data)
 
-    # Temperature+humidity — try configured offsets first, then legacy DFRobot format
-    cfg = _temp_byte_config
+    # Temperature+humidity — try the default offsets first, then legacy DFRobot
+    # format. This runs before a device has a confirmed type (that's what
+    # we're guessing here), so there's no per-device override to consult yet.
+    cfg = _DEFAULT_CONFIGS[TEMPERATURE]
     ts, hs = cfg["temp_start"], cfg["humid_start"]
     fmt = "<h" if cfg["little_endian"] else ">h"
     if n >= max(ts + 2, hs + cfg["humid_size"]):

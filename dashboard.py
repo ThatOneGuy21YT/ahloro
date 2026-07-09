@@ -20,8 +20,8 @@ SSE / browser endpoints (unchanged from server.py):
   GET  /events                — SSE stream
   GET  /devices               — device list JSON
   POST /set_device_type       — override device type
-  POST /set_*_byte_config     — sensor byte-layout config
-  POST /set_button_expire_seconds
+  GET  /device_config         — per-device byte-offset/endianness/tuning config
+  POST /set_device_config     — update per-device byte-offset/endianness/tuning config
 """
 
 import base64
@@ -67,8 +67,6 @@ DIR      = os.path.dirname(os.path.abspath(__file__))
 LOGS_DIR = os.path.join(DIR, "logs")
 
 ONLINE_TIMEOUT         = 900
-_button_expire_seconds: float = 1.0
-_temp_unit: str = "C"   # "C" or "F"
 _POLLER_TIMEOUT               = 120.0   # seconds before poller is considered offline
 
 # Per-gateway poller tracking
@@ -303,6 +301,100 @@ def _init_db():
         cur.execute("""
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS picture TEXT
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS widget_layouts (
+                user_key   TEXT PRIMARY KEY,
+                widgets    JSONB NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        # Maps each widget's short display ID (shown bottom-left on the
+        # widget itself) to the device it's currently bound to, for anyone
+        # cross-referencing a widget from the database directly. Kept
+        # separate from widget_layouts' opaque JSONB blob on purpose.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS widget_ids (
+                short_id    TEXT PRIMARY KEY,
+                widget_id   TEXT NOT NULL,
+                device_name TEXT,
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        # Per-device byte-offset/endianness/type-tuning config (replaces the
+        # old global-per-device-type app_config rows — see the migration below).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS device_config (
+                dev_eui    TEXT PRIMARY KEY,
+                config     JSONB NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        # Backfill the four event-flag columns onto every already-registered
+        # per-device table. _ensure_device_table() only runs this same ALTER
+        # for a table it's creating for the first time — every device added
+        # before this migration existed has its table_name already sitting in
+        # device_table_map, so that lazy path's early-return (table already
+        # known) meant it never ran here. Without this, _db_insert_event's
+        # INSERT (which now references these columns) fails outright for
+        # every pre-existing device, silently dropping all of its new rows.
+        cur.execute("SELECT table_name FROM device_table_map")
+        for (table,) in cur.fetchall():
+            cur.execute(f"""
+                ALTER TABLE {table}
+                    ADD COLUMN IF NOT EXISTS is_open   BOOLEAN,
+                    ADD COLUMN IF NOT EXISTS is_close  BOOLEAN,
+                    ADD COLUMN IF NOT EXISTS is_hold   BOOLEAN,
+                    ADD COLUMN IF NOT EXISTS is_double BOOLEAN
+            """)
+
+        # One-time: byte-offset/endianness config used to be global per
+        # device *type* (one door-sensor check-byte for every door sensor).
+        # Now that it's per-device, seed every already-known device with
+        # whatever the old global values were, so already-calibrated sensors
+        # (e.g. the sound sensor's hard-won byte-offset/endianness fix) don't
+        # silently revert to hardcoded defaults the first time this runs.
+        # Only fires if device_config is still empty — i.e. exactly once.
+        cur.execute("SELECT count(*) FROM device_config")
+        if cur.fetchone()[0] == 0:
+            cur.execute("SELECT key, value FROM app_config")
+            legacy = dict(cur.fetchall())
+
+            def _legacy_fields(byte_key, extra=None):
+                base = legacy.get(byte_key)
+                if not base:
+                    return None
+                merged = dict(base)
+                if extra:
+                    merged.update({k: v for k, v in extra.items() if v is not None})
+                return merged
+
+            legacy_by_type = {
+                device_classifier.TILT:        _legacy_fields("tilt_byte_config"),
+                device_classifier.TEMPERATURE: _legacy_fields(
+                    "temp_byte_config", {"unit": legacy.get("temp_unit")}),
+                device_classifier.SOUND:       _legacy_fields("sound_byte_config"),
+                device_classifier.BUTTON:      _legacy_fields(
+                    "button_byte_config", {"expire_seconds": legacy.get("button_expire_seconds")}),
+                device_classifier.DOOR:        _legacy_fields("door_byte_config"),
+                device_classifier.MOTION:      _legacy_fields("motion_byte_config"),
+                device_classifier.GENERIC:     _legacy_fields("generic_byte_config"),
+            }
+
+            cur.execute("SELECT dev_eui, device_type FROM device_types")
+            migrated = 0
+            for dev_eui, dtype in cur.fetchall():
+                fields = legacy_by_type.get(dtype)
+                if not fields:
+                    continue
+                merged = device_classifier.set_device_config(dev_eui, dtype, fields)
+                cur.execute(
+                    "INSERT INTO device_config (dev_eui, config) VALUES (%s, %s) "
+                    "ON CONFLICT (dev_eui) DO UPDATE SET config=EXCLUDED.config, updated_at=now()",
+                    (dev_eui, psycopg2.extras.Json(merged)),
+                )
+                migrated += 1
+            if migrated:
+                print(f"Migrated legacy byte-config to {migrated} per-device row(s).")
     print("Database schema ready.")
 
 
@@ -345,8 +437,21 @@ def _ensure_device_table(dev_eui: str) -> str:
             value       INTEGER,
             raw_value   DOUBLE PRECISION,
             unit        TEXT,
-            extra       JSONB
+            extra       JSONB,
+            is_open     BOOLEAN,
+            is_close    BOOLEAN,
+            is_hold     BOOLEAN,
+            is_double   BOOLEAN
         )
+    """)
+    # Backfills the four flag columns onto device tables created before they
+    # existed — CREATE TABLE IF NOT EXISTS above is a no-op for those.
+    _db_execute(f"""
+        ALTER TABLE {table}
+            ADD COLUMN IF NOT EXISTS is_open   BOOLEAN,
+            ADD COLUMN IF NOT EXISTS is_close  BOOLEAN,
+            ADD COLUMN IF NOT EXISTS is_hold   BOOLEAN,
+            ADD COLUMN IF NOT EXISTS is_double BOOLEAN
     """)
     _db_execute(
         f"CREATE INDEX IF NOT EXISTS idx_{table}_ts ON {table} (recorded_at DESC)"
@@ -457,8 +562,9 @@ def _db_insert_event(event: dict):
     try:
         table = _ensure_device_table(event["devEUI"])
         _db_execute(
-            f"INSERT INTO {table} (recorded_at, device_type, value, raw_value, unit, extra)"
-            " VALUES (to_timestamp(%s), %s, %s, %s, %s, %s)",
+            f"INSERT INTO {table} (recorded_at, device_type, value, raw_value, unit, extra,"
+            " is_open, is_close, is_hold, is_double)"
+            " VALUES (to_timestamp(%s), %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 event.get("timestamp"),
                 event.get("device_type"),
@@ -466,6 +572,10 @@ def _db_insert_event(event: dict):
                 event.get("raw_value"),
                 event.get("unit"),
                 psycopg2.extras.Json(event["extra"]) if event.get("extra") else None,
+                event.get("is_open"),
+                event.get("is_close"),
+                event.get("is_hold"),
+                event.get("is_double"),
             ),
         )
     except Exception as exc:
@@ -550,57 +660,9 @@ def _load_stats_from_db():
             if dtype in device_classifier.DEVICE_TYPES:
                 _device_type_store[dev_eui.upper()] = dtype
 
-        rows = _db_execute("SELECT key, value FROM app_config", fetch=True)
-        config = {k: v for k, v in (rows or [])}
-
-        tbc = config.get("tilt_byte_config", {})
-        if all(k in tbc for k in ("x", "y", "z")):
-            device_classifier.set_tilt_byte_config(tbc["x"], tbc["y"], tbc["z"])
-
-        tc = config.get("temp_byte_config", {})
-        _TEMP_KEYS = ("temp_start", "temp_divisor", "humid_start",
-                      "humid_size", "humid_divisor", "little_endian")
-        if all(k in tc for k in _TEMP_KEYS):
-            device_classifier.set_temp_byte_config(
-                tc["temp_start"], tc["temp_divisor"],
-                tc["humid_start"], tc["humid_size"],
-                tc["humid_divisor"], tc["little_endian"],
-            )
-
-        bc = config.get("button_byte_config", {})
-        if "check_byte" in bc and "hold_value" in bc:
-            device_classifier.set_button_byte_config(
-                bc["check_byte"], bc["hold_value"], bc.get("double_value", 3),
-            )
-
-        sc = config.get("sound_byte_config", {})
-        _SOUND_KEYS = ("start", "size", "divisor", "little_endian", "loud_db")
-        if all(k in sc for k in _SOUND_KEYS):
-            device_classifier.set_sound_byte_config(
-                sc["start"], sc["size"], sc["divisor"],
-                sc["little_endian"], sc["loud_db"],
-            )
-
-        dc = config.get("door_byte_config", {})
-        if "check_byte" in dc:
-            device_classifier.set_door_byte_config(dc["check_byte"])
-
-        mc = config.get("motion_byte_config", {})
-        if "check_byte" in mc:
-            device_classifier.set_motion_byte_config(mc["check_byte"])
-
-        gc = config.get("generic_byte_config", {})
-        if "check_byte" in gc:
-            device_classifier.set_generic_byte_config(gc["check_byte"])
-
-        global _button_expire_seconds, _temp_unit
-        bes = config.get("button_expire_seconds")
-        if isinstance(bes, (int, float)) and 0.1 <= bes <= 3600:
-            _button_expire_seconds = float(bes)
-
-        tu = config.get("temp_unit")
-        if tu in ("C", "F"):
-            _temp_unit = tu
+        rows = _db_execute("SELECT dev_eui, config FROM device_config", fetch=True)
+        for dev_eui, config in (rows or []):
+            device_classifier.load_device_config(dev_eui, config)
 
     except Exception as exc:
         print(f"DB load_stats error: {exc}", file=sys.stderr)
@@ -650,22 +712,9 @@ def _persist_stats(*, immediate: bool = False):
                     "ON CONFLICT (dev_eui) DO UPDATE SET device_type=EXCLUDED.device_type",
                     (eui, dtype),
                 )
-            for key, value in {
-                "tilt_byte_config":      device_classifier.get_tilt_byte_config(),
-                "temp_byte_config":      device_classifier.get_temp_byte_config(),
-                "button_byte_config":    device_classifier.get_button_byte_config(),
-                "sound_byte_config":     device_classifier.get_sound_byte_config(),
-                "door_byte_config":      device_classifier.get_door_byte_config(),
-                "motion_byte_config":    device_classifier.get_motion_byte_config(),
-                "generic_byte_config":   device_classifier.get_generic_byte_config(),
-                "button_expire_seconds": _button_expire_seconds,
-                "temp_unit":             _temp_unit,
-            }.items():
-                cur.execute(
-                    "INSERT INTO app_config (key, value) VALUES (%s,%s) "
-                    "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
-                    (key, psycopg2.extras.Json(value)),
-                )
+            # Per-device byte-offset/endianness config is saved immediately by
+            # _handle_set_device_config (a deliberate user action), not on this
+            # periodic stats-persist loop — see the device_config table.
     except Exception as exc:
         print(f"DB persist_stats error: {exc}", file=sys.stderr)
 
@@ -703,6 +752,17 @@ def _build_device_out(dev: dict) -> dict:
         "device_type_display": device_classifier.get_display_name(dtype),
         "is_analog":           device_classifier.is_analog(dtype),
     }
+
+
+def _stats_by_device_snapshot() -> dict:
+    """Same shape as the SSE hydration message's stats_by_device — sent
+    alongside devices_update broadcasts too, so the Devices page's tiles can
+    show a live-ticking "changed Xs ago" without a separate poll."""
+    out = {}
+    for eui, ds in _device_states.items():
+        with ds["stats_lock"]:
+            out[eui] = dict(ds["stats"])
+    return out
 
 
 # ── Startup initialisation (from DB — no gateway access needed) ───────────────
@@ -790,6 +850,7 @@ MIME_TYPES = {
     ".ico":  "image/x-icon",
     ".css":  "text/css",
     ".js":   "application/javascript",
+    ".json": "application/json",
 }
 
 
@@ -833,30 +894,18 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/me":
             self._serve_me()
+        elif self.path == "/widgets":
+            self._serve_widgets()
         elif self.path == "/events":
             self._serve_sse()
         elif self.path.startswith("/devices"):
             self._serve_devices()
-        elif self.path == "/tilt_byte_config":
-            self._json_response(200, device_classifier.get_tilt_byte_config())
-        elif self.path == "/temp_byte_config":
-            self._json_response(200, device_classifier.get_temp_byte_config())
-        elif self.path == "/button_byte_config":
-            self._json_response(200, device_classifier.get_button_byte_config())
-        elif self.path == "/button_expire_seconds":
-            self._json_response(200, {"seconds": _button_expire_seconds})
-        elif self.path == "/sound_byte_config":
-            self._json_response(200, device_classifier.get_sound_byte_config())
-        elif self.path == "/temp_unit":
-            self._json_response(200, {"unit": _temp_unit})
-        elif self.path == "/door_byte_config":
-            self._json_response(200, device_classifier.get_door_byte_config())
-        elif self.path == "/motion_byte_config":
-            self._json_response(200, device_classifier.get_motion_byte_config())
-        elif self.path == "/generic_byte_config":
-            self._json_response(200, device_classifier.get_generic_byte_config())
+        elif self.path.startswith("/device_config"):
+            self._serve_device_config()
         elif self.path.startswith("/log_data"):
             self._serve_log_data()
+        elif self.path.startswith("/event_counts_since"):
+            self._serve_event_counts_since()
         elif self.path == "/poller_status":
             self._serve_poller_status()
         else:
@@ -871,28 +920,14 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_ingest_remove_device()
         elif self.path == "/set_device_type":
             if self._check_browser_auth(): self._handle_set_device_type()
-        elif self.path == "/set_tilt_byte_config":
-            if self._check_browser_auth(): self._handle_set_tilt_byte_config()
-        elif self.path == "/set_temp_byte_config":
-            if self._check_browser_auth(): self._handle_set_temp_byte_config()
-        elif self.path == "/set_button_byte_config":
-            if self._check_browser_auth(): self._handle_set_button_byte_config()
-        elif self.path == "/set_button_expire_seconds":
-            if self._check_browser_auth(): self._handle_set_button_expire_seconds()
-        elif self.path == "/set_sound_byte_config":
-            if self._check_browser_auth(): self._handle_set_sound_byte_config()
-        elif self.path == "/set_temp_unit":
-            if self._check_browser_auth(): self._handle_set_temp_unit()
-        elif self.path == "/set_door_byte_config":
-            if self._check_browser_auth(): self._handle_set_door_byte_config()
-        elif self.path == "/set_motion_byte_config":
-            if self._check_browser_auth(): self._handle_set_motion_byte_config()
-        elif self.path == "/set_generic_byte_config":
-            if self._check_browser_auth(): self._handle_set_generic_byte_config()
+        elif self.path == "/set_device_config":
+            if self._check_browser_auth(): self._handle_set_device_config()
         elif self.path == "/add_device":
             if self._check_browser_auth(): self._handle_add_device()
         elif self.path == "/delete_device":
             if self._check_browser_auth(): self._handle_delete_device()
+        elif self.path == "/set_widgets":
+            if self._check_browser_auth(): self._handle_set_widgets()
         elif self.path == "/confirm_gateway_deletions":
             self._handle_confirm_gateway_deletions()
         elif self.path == "/confirm_gateway_additions":
@@ -1222,6 +1257,55 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json_response(401, {"error": "Not authenticated"})
 
+    def _serve_widgets(self):
+        """Custom dashboard widgets, synced per Google account. Without
+        OAuth there's no durable per-user identity to key on, so the client
+        falls back to localStorage entirely — signalled via "serverSide"."""
+        session = getattr(self, "_session", None)
+        if not session:
+            self._json_response(200, {"serverSide": False, "widgets": []})
+            return
+        rows = _db_execute(
+            "SELECT widgets FROM widget_layouts WHERE user_key = %s",
+            (session["email"],), fetch=True,
+        )
+        widgets = rows[0][0] if rows else []
+        self._json_response(200, {"serverSide": True, "widgets": widgets})
+
+    def _handle_set_widgets(self):
+        session = getattr(self, "_session", None)
+        if not session:
+            self._json_response(200, {"ok": False, "serverSide": False})
+            return
+        try:
+            body = self._read_json()
+            widgets = body["widgets"]
+            if not isinstance(widgets, list):
+                raise ValueError("widgets must be a list")
+        except (json.JSONDecodeError, KeyError, ValueError) as exc:
+            self._json_response(400, {"ok": False, "error": str(exc)})
+            return
+        _db_execute(
+            """INSERT INTO widget_layouts (user_key, widgets)
+                   VALUES (%s, %s)
+               ON CONFLICT (user_key) DO UPDATE SET
+                   widgets=EXCLUDED.widgets, updated_at=now()""",
+            (session["email"], psycopg2.extras.Json(widgets)),
+        )
+        for w in widgets:
+            short_id = w.get("shortId")
+            if not short_id:
+                continue
+            device_name = _get_device_name(w["devEUI"]) if w.get("devEUI") else None
+            _db_execute(
+                """INSERT INTO widget_ids (short_id, widget_id, device_name)
+                       VALUES (%s, %s, %s)
+                   ON CONFLICT (short_id) DO UPDATE SET
+                       widget_id=EXCLUDED.widget_id, device_name=EXCLUDED.device_name, updated_at=now()""",
+                (short_id, w.get("id"), device_name),
+            )
+        self._json_response(200, {"ok": True})
+
     def _read_json(self):
         length = int(self.headers.get("Content-Length", 0))
         return json.loads(self.rfile.read(length))
@@ -1265,6 +1349,19 @@ class Handler(BaseHTTPRequestHandler):
 
         if "stats" in event:
             with ds["stats_lock"]:
+                before = ds["stats"]
+                # poller.py sends a running-total snapshot here, not a
+                # per-event delta, so unlike _handle_ingest_lorawan_uplink
+                # this can't just set a flag while incrementing — instead,
+                # detect which counter(s) this specific event bumped by
+                # comparing against the totals from just before the merge.
+                # Without this, every event ingested via this (DFRobot
+                # poller) path would leave is_open/is_close/etc permanently
+                # NULL, since poller.py has no notion of them.
+                for field, flag in (("opens", "is_open"), ("closes", "is_close"),
+                                     ("holds", "is_hold"), ("doubles", "is_double")):
+                    if event["stats"].get(field, 0) > before.get(field, 0):
+                        event[flag] = True
                 ds["stats"].update(event["stats"])
             _persist_stats()
 
@@ -1307,7 +1404,7 @@ class Handler(BaseHTTPRequestHandler):
 
         with _device_registry_lock:
             all_devs = [_build_device_out(d) for d in _device_registry]
-        broadcast({"devices_update": all_devs})
+        broadcast({"devices_update": all_devs, "stats_by_device": _stats_by_device_snapshot()})
         self._json_response(200, {"ok": True})
 
     def _handle_ingest_remove_device(self):
@@ -1355,7 +1452,7 @@ class Handler(BaseHTTPRequestHandler):
                 _pending_gw_deletions[gw_id] = set()
             _pending_gw_deletions[gw_id].add(eui)
 
-        broadcast({"devices_update": remaining})
+        broadcast({"devices_update": remaining, "stats_by_device": _stats_by_device_snapshot()})
         self._json_response(200, {"success": True})
 
     # ── Gateway deletion/addition coordination (poller ↔ dashboard) ──────────
@@ -1535,17 +1632,31 @@ class Handler(BaseHTTPRequestHandler):
             event["value"] = val
             if decoded.get("extra"):
                 event["extra"] = decoded["extra"]
+            changed   = (val != ds.get("last_value"))
+            is_button = (dtype == device_classifier.BUTTON)
             ds["last_value"] = val
-            changed = (val != ds.get("last_value"))
-            if changed:
+            # Buttons only ever send a "pressed" uplink (no physical release
+            # payload), so a real state *change* only happens once and never
+            # again — count every press regardless, matching poller.py's
+            # DFRobot path. Non-button types keep the plain changed-only gate.
+            if changed or is_button:
                 with ds["stats_lock"]:
                     st = ds["stats"]
                     if st["server_start"] is None:
                         st["server_start"] = now
                     if val == 0:
                         st["opens"] += 1
-                    else:
+                        event["is_open"] = True
+                        ev_extra = event.get("extra", {})
+                        if ev_extra.get("held"):
+                            st["holds"] += 1
+                            event["is_hold"] = True
+                        elif ev_extra.get("double"):
+                            st["doubles"] += 1
+                            event["is_double"] = True
+                    elif changed:
                         st["closes"] += 1
+                        event["is_close"] = True
                     st["last_change_ts"] = now
                     event["stats"] = dict(st)
 
@@ -1637,6 +1748,59 @@ class Handler(BaseHTTPRequestHandler):
             ],
             "device_name": device_name,
             "total":       len(event_rows),
+        })
+
+    # Backs the Event Counts widget's "Last 24 hours (from database)" data
+    # source — a bounded window rather than true all-time so this stays a
+    # cheap, constant-cost query no matter how long the device has been
+    # logging (this server is meant to stay lightweight/portable). The
+    # is_open/is_close/is_hold/is_double columns are written by
+    # _handle_ingest_lorawan_uplink at the exact point it updates the live
+    # in-memory stats, so this can never drift from that logic — no state-
+    # change detection is re-derived here.
+    def _serve_event_counts_since(self):
+        from urllib.parse import urlparse, parse_qs
+        qs      = parse_qs(urlparse(self.path).query)
+        dev_eui = qs.get("devEUI", [None])[0]
+        if not dev_eui:
+            self._json_response(400, {"error": "devEUI required"})
+            return
+
+        map_rows = _db_execute(
+            "SELECT table_name FROM device_table_map WHERE dev_eui = %s",
+            (dev_eui,), fetch=True,
+        )
+        if not map_rows:
+            self._json_response(404, {"error": "Device not found"})
+            return
+        table = map_rows[0][0]
+
+        try:
+            rows = _db_execute(
+                "SELECT"
+                " count(*) FILTER (WHERE is_open),"
+                " count(*) FILTER (WHERE is_close),"
+                " count(*) FILTER (WHERE is_hold),"
+                " count(*) FILTER (WHERE is_double),"
+                " min(raw_value), max(raw_value), avg(raw_value), count(raw_value)"
+                f" FROM {table} WHERE recorded_at > now() - interval '24 hours'",
+                fetch=True,
+            )
+        except Exception as exc:
+            self._json_response(500, {"error": str(exc)})
+            return
+
+        opens, closes, holds, doubles, min_v, max_v, avg_v, count_v = rows[0]
+        self._json_response(200, {
+            "windowHours": 24,
+            "opens":       opens or 0,
+            "closes":      closes or 0,
+            "holds":       holds or 0,
+            "doubles":     doubles or 0,
+            "min_value":   min_v,
+            "max_value":   max_v,
+            "avg_value":   avg_v,
+            "count_value": count_v or 0,
         })
 
     # ── Static file serving ───────────────────────────────────────────────────
@@ -1770,7 +1934,8 @@ class Handler(BaseHTTPRequestHandler):
 
         with _device_registry_lock:
             registry_snap = list(_device_registry)
-        broadcast({"devices_update": [_build_device_out(d) for d in registry_snap]})
+        broadcast({"devices_update": [_build_device_out(d) for d in registry_snap],
+                   "stats_by_device": _stats_by_device_snapshot()})
 
         self._json_response(200, {
             "success":      True,
@@ -1778,154 +1943,112 @@ class Handler(BaseHTTPRequestHandler):
             "display_name": device_classifier.get_display_name(dtype),
         })
 
-    def _handle_set_tilt_byte_config(self):
-        try:
-            body = self._read_json()
-            x, y, z = int(body["x"]), int(body["y"]), int(body["z"])
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
-            self._json_response(400, {"success": False, "error": "x, y, z must be integers"})
+    def _serve_device_config(self):
+        from urllib.parse import urlparse, parse_qs
+        qs      = parse_qs(urlparse(self.path).query)
+        dev_eui = (qs.get("devEUI", [None])[0] or "").upper()
+        if not dev_eui:
+            self._json_response(400, {"error": "devEUI required"})
             return
-        if not all(0 <= v <= 60 for v in (x, y, z)):
-            self._json_response(400, {"success": False, "error": "Byte offsets must be 0–60"})
-            return
-        device_classifier.set_tilt_byte_config(x, y, z)
-        _persist_stats(immediate=True)
-        self._json_response(200, {"success": True, **device_classifier.get_tilt_byte_config()})
+        dtype = _get_device_type(dev_eui)
+        self._json_response(200, {
+            "device_type": dtype,
+            "config":      device_classifier.get_device_config(dev_eui, dtype),
+        })
 
-    def _handle_set_temp_byte_config(self):
+    def _handle_set_device_config(self):
+        """Validates and stores one device's byte-offset/endianness/type-tuning
+        config. Bounds mirror exactly what the old per-type handlers enforced,
+        just consolidated into one type-dispatched handler."""
         try:
-            body          = self._read_json()
-            temp_start    = int(body["temp_start"])
-            temp_divisor  = float(body["temp_divisor"])
-            humid_start   = int(body["humid_start"])
-            humid_size    = int(body["humid_size"])
-            humid_divisor = float(body["humid_divisor"])
-            little_endian = bool(body["little_endian"])
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
+            body    = self._read_json()
+            dev_eui = str(body["devEUI"]).upper()
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            self._json_response(400, {"success": False, "error": "devEUI required"})
+            return
+
+        dtype  = _get_device_type(dev_eui)
+        fields = {}
+        try:
+            if dtype == device_classifier.TILT:
+                x, y, z = int(body["x"]), int(body["y"]), int(body["z"])
+                if not all(0 <= v <= 60 for v in (x, y, z)):
+                    raise ValueError("Byte offsets must be 0–60")
+                fields = {"x": x, "y": y, "z": z,
+                          "little_endian": bool(body.get("little_endian", True))}
+
+            elif dtype == device_classifier.TEMPERATURE:
+                temp_start    = int(body["temp_start"])
+                temp_divisor  = float(body["temp_divisor"])
+                humid_start   = int(body["humid_start"])
+                humid_size    = int(body["humid_size"])
+                humid_divisor = float(body["humid_divisor"])
+                little_endian = bool(body["little_endian"])
+                unit          = str(body.get("unit", "C")).upper()
+                if not (0 <= temp_start <= 60 and 0 <= humid_start <= 60):
+                    raise ValueError("Start bytes must be 0–60")
+                if humid_size not in (1, 2):
+                    raise ValueError("humid_size must be 1 or 2")
+                if temp_divisor <= 0 or humid_divisor <= 0:
+                    raise ValueError("Divisors must be > 0")
+                if unit not in ("C", "F"):
+                    raise ValueError("unit must be 'C' or 'F'")
+                fields = {"temp_start": temp_start, "temp_divisor": temp_divisor,
+                          "humid_start": humid_start, "humid_size": humid_size,
+                          "humid_divisor": humid_divisor, "little_endian": little_endian,
+                          "unit": unit}
+
+            elif dtype == device_classifier.SOUND:
+                start         = int(body["start"])
+                size          = int(body["size"])
+                divisor       = float(body["divisor"])
+                little_endian = bool(body["little_endian"])
+                loud_db       = float(body["loud_db"])
+                if not (0 <= start <= 60):
+                    raise ValueError("start must be 0–60")
+                if size not in (1, 2):
+                    raise ValueError("size must be 1 or 2")
+                if divisor <= 0:
+                    raise ValueError("divisor must be > 0")
+                if not (0 <= loud_db <= 200):
+                    raise ValueError("loud_db must be 0–200")
+                fields = {"start": start, "size": size, "divisor": divisor,
+                          "little_endian": little_endian, "loud_db": loud_db}
+
+            elif dtype == device_classifier.BUTTON:
+                check_byte     = int(body["check_byte"])
+                hold_value     = int(body["hold_value"])
+                double_value   = int(body.get("double_value", 3))
+                expire_seconds = float(body.get("expire_seconds", 1.0))
+                if check_byte < -1 or check_byte > 60:
+                    raise ValueError("check_byte must be -1 or 0–60")
+                if not (1 <= hold_value <= 255) or not (1 <= double_value <= 255):
+                    raise ValueError("hold/double_value must be 1–255")
+                if not (0.1 <= expire_seconds <= 3600):
+                    raise ValueError("expire_seconds must be between 0.1 and 3600")
+                fields = {"check_byte": check_byte, "hold_value": hold_value,
+                          "double_value": double_value, "expire_seconds": expire_seconds}
+
+            elif dtype in (device_classifier.DOOR, device_classifier.MOTION, device_classifier.GENERIC):
+                check_byte = int(body["check_byte"])
+                if check_byte < -1 or check_byte > 60:
+                    raise ValueError("check_byte must be −1 or 0–60")
+                fields = {"check_byte": check_byte}
+
+            else:
+                self._json_response(400, {"success": False, "error": f"Unsupported device type: {dtype}"})
+                return
+        except (KeyError, ValueError, TypeError) as exc:
             self._json_response(400, {"success": False, "error": str(exc)})
             return
-        if not (0 <= temp_start <= 60 and 0 <= humid_start <= 60):
-            self._json_response(400, {"success": False, "error": "Start bytes must be 0–60"})
-            return
-        if humid_size not in (1, 2):
-            self._json_response(400, {"success": False, "error": "humid_size must be 1 or 2"})
-            return
-        if temp_divisor <= 0 or humid_divisor <= 0:
-            self._json_response(400, {"success": False, "error": "Divisors must be > 0"})
-            return
-        device_classifier.set_temp_byte_config(
-            temp_start, temp_divisor, humid_start, humid_size, humid_divisor, little_endian)
-        _persist_stats(immediate=True)
-        self._json_response(200, {"success": True, **device_classifier.get_temp_byte_config()})
 
-    def _handle_set_button_byte_config(self):
-        try:
-            body         = self._read_json()
-            check_byte   = int(body["check_byte"])
-            hold_value   = int(body["hold_value"])
-            double_value = int(body.get("double_value", 3))
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
-            self._json_response(400, {"success": False,
-                                      "error": "check_byte, hold_value, double_value must be integers"})
-            return
-        if check_byte < -1 or check_byte > 60:
-            self._json_response(400, {"success": False, "error": "check_byte must be -1 or 0–60"})
-            return
-        if not (1 <= hold_value <= 255) or not (1 <= double_value <= 255):
-            self._json_response(400, {"success": False, "error": "hold/double_value must be 1–255"})
-            return
-        device_classifier.set_button_byte_config(check_byte, hold_value, double_value)
-        _persist_stats(immediate=True)
-        self._json_response(200, {"success": True, **device_classifier.get_button_byte_config()})
-
-    def _handle_set_button_expire_seconds(self):
-        global _button_expire_seconds
-        try:
-            body = self._read_json()
-            secs = float(body["seconds"])
-        except (KeyError, ValueError, TypeError):
-            self._json_response(400, {"success": False, "error": "seconds must be a number."})
-            return
-        if not (0.1 <= secs <= 3600):
-            self._json_response(400, {"success": False,
-                                      "error": "seconds must be between 0.1 and 3600."})
-            return
-        _button_expire_seconds = secs
-        _persist_stats(immediate=True)
-        self._json_response(200, {"success": True, "seconds": _button_expire_seconds})
-
-    def _handle_set_sound_byte_config(self):
-        try:
-            body         = self._read_json()
-            start        = int(body["start"])
-            size         = int(body["size"])
-            divisor      = float(body["divisor"])
-            little_endian = bool(body["little_endian"])
-            loud_db      = float(body["loud_db"])
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
-            self._json_response(400, {"success": False, "error": str(exc)})
-            return
-        if not (0 <= start <= 60):
-            self._json_response(400, {"success": False, "error": "start must be 0–60"})
-            return
-        if size not in (1, 2):
-            self._json_response(400, {"success": False, "error": "size must be 1 or 2"})
-            return
-        if divisor <= 0:
-            self._json_response(400, {"success": False, "error": "divisor must be > 0"})
-            return
-        if not (0 <= loud_db <= 200):
-            self._json_response(400, {"success": False, "error": "loud_db must be 0–200"})
-            return
-        device_classifier.set_sound_byte_config(start, size, divisor, little_endian, loud_db)
-        _persist_stats(immediate=True)
-        self._json_response(200, {"success": True, **device_classifier.get_sound_byte_config()})
-
-    def _handle_set_temp_unit(self):
-        global _temp_unit
-        try:
-            body = self._read_json()
-            unit = str(body["unit"]).upper()
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
-            self._json_response(400, {"success": False, "error": "unit must be 'C' or 'F'"}); return
-        if unit not in ("C", "F"):
-            self._json_response(400, {"success": False, "error": "unit must be 'C' or 'F'"}); return
-        _temp_unit = unit
-        _persist_stats(immediate=True)
-        self._json_response(200, {"success": True, "unit": _temp_unit})
-
-    def _handle_set_door_byte_config(self):
-        self._handle_set_simple_check_byte("door")
-
-    def _handle_set_motion_byte_config(self):
-        self._handle_set_simple_check_byte("motion")
-
-    def _handle_set_generic_byte_config(self):
-        self._handle_set_simple_check_byte("generic")
-
-    def _handle_set_simple_check_byte(self, sensor_type: str):
-        try:
-            body       = self._read_json()
-            check_byte = int(body["check_byte"])
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
-            self._json_response(400, {"success": False,
-                                      "error": "check_byte must be an integer"}); return
-        if check_byte < -1 or check_byte > 60:
-            self._json_response(400, {"success": False,
-                                      "error": "check_byte must be −1 or 0–60"}); return
-        setters = {
-            "door":    device_classifier.set_door_byte_config,
-            "motion":  device_classifier.set_motion_byte_config,
-            "generic": device_classifier.set_generic_byte_config,
-        }
-        getters = {
-            "door":    device_classifier.get_door_byte_config,
-            "motion":  device_classifier.get_motion_byte_config,
-            "generic": device_classifier.get_generic_byte_config,
-        }
-        setters[sensor_type](check_byte)
-        _persist_stats(immediate=True)
-        self._json_response(200, {"success": True, **getters[sensor_type]()})
+        merged = device_classifier.set_device_config(dev_eui, dtype, fields)
+        _db_execute(
+            "INSERT INTO device_config (dev_eui, config) VALUES (%s, %s) "
+            "ON CONFLICT (dev_eui) DO UPDATE SET config=EXCLUDED.config, updated_at=now()",
+            (dev_eui, psycopg2.extras.Json(merged)),
+        )
+        self._json_response(200, {"success": True, "device_type": dtype, "config": merged})
 
     # ── Shared response helper ────────────────────────────────────────────────
 
