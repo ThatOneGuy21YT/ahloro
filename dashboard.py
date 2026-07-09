@@ -310,6 +310,35 @@ def _init_db():
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
         """)
+        # Maps each widget's short display ID (shown bottom-left on the
+        # widget itself) to the device it's currently bound to, for anyone
+        # cross-referencing a widget from the database directly. Kept
+        # separate from widget_layouts' opaque JSONB blob on purpose.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS widget_ids (
+                short_id    TEXT PRIMARY KEY,
+                widget_id   TEXT NOT NULL,
+                device_name TEXT,
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        # Backfill the four event-flag columns onto every already-registered
+        # per-device table. _ensure_device_table() only runs this same ALTER
+        # for a table it's creating for the first time — every device added
+        # before this migration existed has its table_name already sitting in
+        # device_table_map, so that lazy path's early-return (table already
+        # known) meant it never ran here. Without this, _db_insert_event's
+        # INSERT (which now references these columns) fails outright for
+        # every pre-existing device, silently dropping all of its new rows.
+        cur.execute("SELECT table_name FROM device_table_map")
+        for (table,) in cur.fetchall():
+            cur.execute(f"""
+                ALTER TABLE {table}
+                    ADD COLUMN IF NOT EXISTS is_open   BOOLEAN,
+                    ADD COLUMN IF NOT EXISTS is_close  BOOLEAN,
+                    ADD COLUMN IF NOT EXISTS is_hold   BOOLEAN,
+                    ADD COLUMN IF NOT EXISTS is_double BOOLEAN
+            """)
     print("Database schema ready.")
 
 
@@ -352,8 +381,21 @@ def _ensure_device_table(dev_eui: str) -> str:
             value       INTEGER,
             raw_value   DOUBLE PRECISION,
             unit        TEXT,
-            extra       JSONB
+            extra       JSONB,
+            is_open     BOOLEAN,
+            is_close    BOOLEAN,
+            is_hold     BOOLEAN,
+            is_double   BOOLEAN
         )
+    """)
+    # Backfills the four flag columns onto device tables created before they
+    # existed — CREATE TABLE IF NOT EXISTS above is a no-op for those.
+    _db_execute(f"""
+        ALTER TABLE {table}
+            ADD COLUMN IF NOT EXISTS is_open   BOOLEAN,
+            ADD COLUMN IF NOT EXISTS is_close  BOOLEAN,
+            ADD COLUMN IF NOT EXISTS is_hold   BOOLEAN,
+            ADD COLUMN IF NOT EXISTS is_double BOOLEAN
     """)
     _db_execute(
         f"CREATE INDEX IF NOT EXISTS idx_{table}_ts ON {table} (recorded_at DESC)"
@@ -464,8 +506,9 @@ def _db_insert_event(event: dict):
     try:
         table = _ensure_device_table(event["devEUI"])
         _db_execute(
-            f"INSERT INTO {table} (recorded_at, device_type, value, raw_value, unit, extra)"
-            " VALUES (to_timestamp(%s), %s, %s, %s, %s, %s)",
+            f"INSERT INTO {table} (recorded_at, device_type, value, raw_value, unit, extra,"
+            " is_open, is_close, is_hold, is_double)"
+            " VALUES (to_timestamp(%s), %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 event.get("timestamp"),
                 event.get("device_type"),
@@ -473,6 +516,10 @@ def _db_insert_event(event: dict):
                 event.get("raw_value"),
                 event.get("unit"),
                 psycopg2.extras.Json(event["extra"]) if event.get("extra") else None,
+                event.get("is_open"),
+                event.get("is_close"),
+                event.get("is_hold"),
+                event.get("is_double"),
             ),
         )
     except Exception as exc:
@@ -866,6 +913,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response(200, device_classifier.get_generic_byte_config())
         elif self.path.startswith("/log_data"):
             self._serve_log_data()
+        elif self.path.startswith("/event_counts_since"):
+            self._serve_event_counts_since()
         elif self.path == "/poller_status":
             self._serve_poller_status()
         else:
@@ -1268,6 +1317,18 @@ class Handler(BaseHTTPRequestHandler):
                    widgets=EXCLUDED.widgets, updated_at=now()""",
             (session["email"], psycopg2.extras.Json(widgets)),
         )
+        for w in widgets:
+            short_id = w.get("shortId")
+            if not short_id:
+                continue
+            device_name = _get_device_name(w["devEUI"]) if w.get("devEUI") else None
+            _db_execute(
+                """INSERT INTO widget_ids (short_id, widget_id, device_name)
+                       VALUES (%s, %s, %s)
+                   ON CONFLICT (short_id) DO UPDATE SET
+                       widget_id=EXCLUDED.widget_id, device_name=EXCLUDED.device_name, updated_at=now()""",
+                (short_id, w.get("id"), device_name),
+            )
         self._json_response(200, {"ok": True})
 
     def _read_json(self):
@@ -1313,6 +1374,19 @@ class Handler(BaseHTTPRequestHandler):
 
         if "stats" in event:
             with ds["stats_lock"]:
+                before = ds["stats"]
+                # poller.py sends a running-total snapshot here, not a
+                # per-event delta, so unlike _handle_ingest_lorawan_uplink
+                # this can't just set a flag while incrementing — instead,
+                # detect which counter(s) this specific event bumped by
+                # comparing against the totals from just before the merge.
+                # Without this, every event ingested via this (DFRobot
+                # poller) path would leave is_open/is_close/etc permanently
+                # NULL, since poller.py has no notion of them.
+                for field, flag in (("opens", "is_open"), ("closes", "is_close"),
+                                     ("holds", "is_hold"), ("doubles", "is_double")):
+                    if event["stats"].get(field, 0) > before.get(field, 0):
+                        event[flag] = True
                 ds["stats"].update(event["stats"])
             _persist_stats()
 
@@ -1597,13 +1671,17 @@ class Handler(BaseHTTPRequestHandler):
                         st["server_start"] = now
                     if val == 0:
                         st["opens"] += 1
+                        event["is_open"] = True
                         ev_extra = event.get("extra", {})
                         if ev_extra.get("held"):
                             st["holds"] += 1
+                            event["is_hold"] = True
                         elif ev_extra.get("double"):
                             st["doubles"] += 1
+                            event["is_double"] = True
                     elif changed:
                         st["closes"] += 1
+                        event["is_close"] = True
                     st["last_change_ts"] = now
                     event["stats"] = dict(st)
 
@@ -1695,6 +1773,59 @@ class Handler(BaseHTTPRequestHandler):
             ],
             "device_name": device_name,
             "total":       len(event_rows),
+        })
+
+    # Backs the Event Counts widget's "Last 24 hours (from database)" data
+    # source — a bounded window rather than true all-time so this stays a
+    # cheap, constant-cost query no matter how long the device has been
+    # logging (this server is meant to stay lightweight/portable). The
+    # is_open/is_close/is_hold/is_double columns are written by
+    # _handle_ingest_lorawan_uplink at the exact point it updates the live
+    # in-memory stats, so this can never drift from that logic — no state-
+    # change detection is re-derived here.
+    def _serve_event_counts_since(self):
+        from urllib.parse import urlparse, parse_qs
+        qs      = parse_qs(urlparse(self.path).query)
+        dev_eui = qs.get("devEUI", [None])[0]
+        if not dev_eui:
+            self._json_response(400, {"error": "devEUI required"})
+            return
+
+        map_rows = _db_execute(
+            "SELECT table_name FROM device_table_map WHERE dev_eui = %s",
+            (dev_eui,), fetch=True,
+        )
+        if not map_rows:
+            self._json_response(404, {"error": "Device not found"})
+            return
+        table = map_rows[0][0]
+
+        try:
+            rows = _db_execute(
+                "SELECT"
+                " count(*) FILTER (WHERE is_open),"
+                " count(*) FILTER (WHERE is_close),"
+                " count(*) FILTER (WHERE is_hold),"
+                " count(*) FILTER (WHERE is_double),"
+                " min(raw_value), max(raw_value), avg(raw_value), count(raw_value)"
+                f" FROM {table} WHERE recorded_at > now() - interval '24 hours'",
+                fetch=True,
+            )
+        except Exception as exc:
+            self._json_response(500, {"error": str(exc)})
+            return
+
+        opens, closes, holds, doubles, min_v, max_v, avg_v, count_v = rows[0]
+        self._json_response(200, {
+            "windowHours": 24,
+            "opens":       opens or 0,
+            "closes":      closes or 0,
+            "holds":       holds or 0,
+            "doubles":     doubles or 0,
+            "min_value":   min_v,
+            "max_value":   max_v,
+            "avg_value":   avg_v,
+            "count_value": count_v or 0,
         })
 
     # ── Static file serving ───────────────────────────────────────────────────

@@ -412,6 +412,11 @@
     }
     .widget-title    { font-size: 16px; font-weight: 500; }
     .widget-subtitle { font-size: 12px; color: var(--md-on-surface-variant); margin-top: 2px; }
+    .widget-shortid {
+      position: absolute; bottom: 8px; left: 12px;
+      font-size: 10px; font-family: 'Roboto Mono', monospace; letter-spacing: .5px;
+      color: var(--md-outline); opacity: .6; pointer-events: none;
+    }
 
     /* ── Drop ghost ──────────────────────────────────────────────────────── */
     #drop-ghost {
@@ -1237,7 +1242,7 @@
       </div>
       <div class="field">
         <label>Widget Type <span class="required">*</span></label>
-        <select id="wcfg-kind">
+        <select id="wcfg-kind" onchange="onWcfgKindChange()">
           <option value="status">Status</option>
           <option value="last_update">Last Update</option>
           <option value="event_counts">Event Counts</option>
@@ -1250,6 +1255,13 @@
         <label>Device</label>
         <select id="wcfg-device">
           <option value="">— no device —</option>
+        </select>
+      </div>
+      <div class="field" id="wcfg-datasource-field" style="display:none">
+        <label>Data Source</label>
+        <select id="wcfg-datasource">
+          <option value="live">Live — count since this widget was created</option>
+          <option value="history">Last 24 hours — from saved history</option>
         </select>
       </div>
     </div>
@@ -2037,8 +2049,25 @@ function collectWidgetRefs(kind, suffix) {
 
 function widgetIdSuffix(id) { return id.replace(/[^a-zA-Z0-9_-]/g, ''); }
 
+// User-facing short ID shown bottom-left on every widget — assigned once at
+// creation and never regenerated, so it stays a stable reference for as long
+// as the widget exists (including in the widget_ids Postgres table it's
+// upserted into alongside the device it's bound to). Excludes visually
+// ambiguous characters (0/O, 1/I) since it's meant to be read off-screen.
+const SHORT_ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function genShortId() {
+  let id;
+  do {
+    id = Array.from({ length: 8 }, () => SHORT_ID_CHARS[Math.floor(Math.random() * SHORT_ID_CHARS.length)]).join('');
+  } while (widgets.some(w => w.shortId === id));
+  return id;
+}
+
 function renderWidget(def) {
   if (widgetInstances[def.id]) return;   // already rendered
+  // Backfill for widgets created before short IDs existed — saved on the
+  // next layout change, or immediately by maybeRenderWidgets() at boot.
+  if (!def.shortId) def.shortId = genShortId();
   const suffix = widgetIdSuffix(def.id);
   const dev    = def.devEUI ? deviceMeta[def.devEUI] : null;
   const km     = widgetKindMeta(def.kind);
@@ -2060,7 +2089,8 @@ function renderWidget(def) {
         Export
       </button>` : ''}
     </div>
-    ${widgetBodyHTML(def.kind, suffix)}`);
+    ${widgetBodyHTML(def.kind, suffix)}
+    <div class="widget-shortid" title="Widget ID">${def.shortId}</div>`);
 
   const refs = collectWidgetRefs(def.kind, suffix);
   widgetInstances[def.id] = { kind: def.kind, devEUI: def.devEUI || null, el, refs };
@@ -2071,6 +2101,7 @@ function renderWidget(def) {
   attachWidgetContextMenu(el, def.id);
   applyWidgetDeviceType(def.id);
   refreshWidgetInstance(def.id);
+  if (def.kind === 'event_counts' && def.dataSource === 'history') refreshHistoryStats(def.id);
   updateEmptyGridHint();
 }
 
@@ -2294,7 +2325,9 @@ function handleDevicesUpdate(devices) {
 // widget list itself have loaded (order between the two isn't guaranteed).
 function maybeRenderWidgets() {
   if (!devicesReady || !widgetsReady) return;
-  widgets.forEach(renderWidget);
+  const neededBackfill = widgets.some(w => !w.shortId);
+  widgets.forEach(renderWidget);   // backfills any missing def.shortId as a side effect
+  if (neededBackfill) WidgetStore.save(widgets);
   updateEmptyGridHint();
 }
 
@@ -2327,7 +2360,10 @@ function ingestBinaryEvent(eui, ev) {
 
   const prevChangeAt = ds.lastChangeAt;
   const extra        = ev.extra || {};
-  if (ev.stats) applyStats(eui, ev.stats);
+  if (ev.stats) {
+    applyStats(eui, ev.stats);
+    scheduleHistoryRefresh(eui);   // only "history" widgets act on this — see below
+  }
 
   // Button events always log (fire on every press/hold, not just state changes).
   const dm       = deviceMeta[eui];
@@ -2522,6 +2558,10 @@ function updateRawValueWidget(eui, rawValue, unit) {
 }
 
 // ── Event-counts widget ────────────────────────────────────────────────────
+// Data source only applies to the binary opens/closes/holds/doubles variant
+// below — the analog and gyro variants have no obvious "since creation"
+// delta (a minimum isn't something you subtract a baseline from) and always
+// just show their current live values regardless of def.dataSource.
 function updateStats(eui) {
   const ds = deviceStates[eui];
   const dm = deviceMeta[eui];
@@ -2549,15 +2589,77 @@ function updateStats(eui) {
       ws.stAvg.textContent     = ds.countValue > 0
         ? conv(+(ds.sumValue / ds.countValue).toFixed(1)) + unit : '—';
     } else {
-      ws.stOpens.textContent  = ds.opens;
-      ws.stCloses.textContent = ds.closes;
-      if (ws.stHolds)   ws.stHolds.textContent   = ds.holds   ?? 0;
-      if (ws.stDoubles) ws.stDoubles.textContent = ds.doubles ?? 0;
-      const elapsedMin = (Date.now() - ds.sessionStart) / 60000;
-      const total      = ds.opens + ds.closes;
-      ws.stRate.textContent = elapsedMin > 0.1 ? (total / elapsedMin).toFixed(1) : '—';
+      const def = widgets.find(w => w.id === id);
+      if (def && def.dataSource === 'history') {
+        const hs = widgetInstances[id].historyStats;
+        ws.stOpens.textContent  = hs ? hs.opens   : '—';
+        ws.stCloses.textContent = hs ? hs.closes  : '—';
+        if (ws.stHolds)   ws.stHolds.textContent   = hs ? hs.holds   : '—';
+        if (ws.stDoubles) ws.stDoubles.textContent = hs ? hs.doubles : '—';
+        ws.stRate.textContent = hs && hs.opens + hs.closes > 0
+          ? ((hs.opens + hs.closes) / (24 * 60)).toFixed(2) : '—';
+      } else {
+        // "live": baseline defaults to all-zero for widgets predating this
+        // feature (def.statsBaseline unset), so they keep showing exactly
+        // what they always have — only newly-baselined widgets see a delta.
+        const base = (def && def.statsBaseline) || { opens: 0, closes: 0, holds: 0, doubles: 0 };
+        const opens   = ds.opens   - base.opens;
+        const closes  = ds.closes  - base.closes;
+        const holds   = (ds.holds   ?? 0) - base.holds;
+        const doubles = (ds.doubles ?? 0) - base.doubles;
+        ws.stOpens.textContent  = opens;
+        ws.stCloses.textContent = closes;
+        if (ws.stHolds)   ws.stHolds.textContent   = holds;
+        if (ws.stDoubles) ws.stDoubles.textContent = doubles;
+        const elapsedMin = (Date.now() - ds.sessionStart) / 60000;
+        const total      = opens + closes;
+        ws.stRate.textContent = elapsedMin > 0.1 ? (total / elapsedMin).toFixed(1) : '—';
+      }
     }
   });
+}
+
+// Fetches the last-24h aggregate for a single "history" mode Event Counts
+// widget and caches it on the instance — updateStats() just reads the cache,
+// so this is the only place that hits the network for that data source.
+async function refreshHistoryStats(widgetId) {
+  const wi = widgetInstances[widgetId];
+  if (!wi || !wi.devEUI) return;
+  try {
+    const res  = await fetch(`/event_counts_since?devEUI=${encodeURIComponent(wi.devEUI)}`);
+    const data = await res.json();
+    if (!widgetInstances[widgetId]) return;   // deleted while the fetch was in flight
+    widgetInstances[widgetId].historyStats = data;
+    updateStats(wi.devEUI);
+  } catch (_) { /* leave the previous cached value (or '—') showing */ }
+}
+
+// Keeps every "history" widget's 24h window from going stale even with no
+// new events — the real-time trigger below (scheduleHistoryRefresh) is what
+// makes it track live activity; this is just the fallback for a quiet device.
+setInterval(() => {
+  Object.keys(widgetInstances).forEach(id => {
+    const def = widgets.find(w => w.id === id);
+    if (def && def.kind === 'event_counts' && def.dataSource === 'history') refreshHistoryStats(id);
+  });
+}, 60000);
+
+// Re-fetches a device's "history" widgets right after one of its events
+// actually changes a counter, rather than waiting for the 60s fallback poll.
+// Debounced per device (not skipped) — a burst of events (e.g. a held +
+// double-tap button press arriving as two events a few ms apart) collapses
+// into one fetch that reflects both, instead of two racing requests whose
+// responses could resolve out of order and briefly show a stale count.
+const _historyRefreshTimers = {};
+function scheduleHistoryRefresh(eui) {
+  if (_historyRefreshTimers[eui]) return;
+  _historyRefreshTimers[eui] = setTimeout(() => {
+    delete _historyRefreshTimers[eui];
+    eventCountWidgetsFor(eui).forEach(id => {
+      const def = widgets.find(w => w.id === id);
+      if (def && def.dataSource === 'history') refreshHistoryStats(id);
+    });
+  }, 150);
 }
 
 // Called every second to tick elapsed-time displays ("state age", "X ago")
@@ -4352,24 +4454,50 @@ function openWidgetConfigDialog(widgetId, createPos) {
     document.getElementById('wcfg-title').textContent = 'Configure Widget';
     document.getElementById('wcfg-name').value  = def.title || '';
     document.getElementById('wcfg-kind').value  = def.kind;
+    document.getElementById('wcfg-datasource').value = def.dataSource || 'live';
     document.getElementById('wcfg-delete-btn').style.display = '';
     populateWidgetDeviceSelect(def.devEUI);
   } else {
     document.getElementById('wcfg-title').textContent = 'Add Widget';
     document.getElementById('wcfg-name').value = '';
     document.getElementById('wcfg-kind').value = 'status';
+    document.getElementById('wcfg-datasource').value = 'live';
     document.getElementById('wcfg-delete-btn').style.display = 'none';
     populateWidgetDeviceSelect('');
   }
+  onWcfgKindChange();
   wcfgDialog.showModal();
+}
+
+// Data source only makes sense for Event Counts — every other kind either
+// shows a single live value or a fixed-size recent window already.
+function onWcfgKindChange() {
+  const isEventCounts = document.getElementById('wcfg-kind').value === 'event_counts';
+  document.getElementById('wcfg-datasource-field').style.display = isEventCounts ? '' : 'none';
 }
 
 function closeWidgetConfigDialog() { wcfgDialog.close(); }
 
+// Snapshots the device's current live counters so a "live" Event Counts
+// widget can display opens/closes/holds/doubles *since this moment* by
+// subtracting this baseline from ds.* going forward (see updateStats).
+// Zeros (rather than the snapshot) for a widget with no device yet — there's
+// nothing to subtract from until one is chosen.
+function captureStatsBaseline(devEUI) {
+  const ds = devEUI && deviceStates[devEUI];
+  return {
+    opens:   ds ? (ds.opens   || 0) : 0,
+    closes:  ds ? (ds.closes  || 0) : 0,
+    holds:   ds ? (ds.holds   || 0) : 0,
+    doubles: ds ? (ds.doubles || 0) : 0,
+  };
+}
+
 function submitWidgetConfig() {
-  const name   = document.getElementById('wcfg-name').value.trim();
-  const kind   = document.getElementById('wcfg-kind').value;
-  const devEUI = document.getElementById('wcfg-device').value || null;
+  const name       = document.getElementById('wcfg-name').value.trim();
+  const kind       = document.getElementById('wcfg-kind').value;
+  const devEUI     = document.getElementById('wcfg-device').value || null;
+  const dataSource = document.getElementById('wcfg-datasource').value;
 
   if (currentWidgetConfigId) {
     const def = widgets.find(w => w.id === currentWidgetConfigId);
@@ -4377,16 +4505,29 @@ function submitWidgetConfig() {
     removeWidgetInstance(def.id);   // drop old DOM; col/row stay on `def`
     def.title  = name;
     def.kind   = kind;
-    def.devEUI = devEUI;
+    // Re-baseline when switching *into* live mode from history, or when the
+    // bound device changes — either makes the old baseline meaningless to
+    // keep comparing against. Pre-existing widgets have no dataSource set at
+    // all (not 'history') — leave those alone on an otherwise-unchanged save,
+    // or they'd surprise-reset to 0 just from opening Configure and hitting
+    // Save. Staying on "live" with the same device must never reset the
+    // count the user is already watching.
+    if (dataSource === 'live' && (def.dataSource === 'history' || def.devEUI !== devEUI)) {
+      def.statsBaseline = captureStatsBaseline(devEUI);
+    }
+    def.dataSource = dataSource;
+    def.devEUI     = devEUI;
     renderWidget(def);
   } else {
     const pos = pendingWidgetCreatePos || { col: 1, row: 1 };
     const def = {
-      id:     'w-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7),
-      kind, title: name, devEUI,
+      id:      'w-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7),
+      shortId: genShortId(),
+      kind, title: name, devEUI, dataSource,
       col: `${pos.col} / span 8`,
       row: `${pos.row} / span 6`,
     };
+    if (dataSource === 'live') def.statsBaseline = captureStatsBaseline(devEUI);
     widgets.push(def);
     renderWidget(def);
   }
