@@ -303,6 +303,13 @@ def _init_db():
         cur.execute("""
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS picture TEXT
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS widget_layouts (
+                user_key   TEXT PRIMARY KEY,
+                widgets    JSONB NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
     print("Database schema ready.")
 
 
@@ -833,6 +840,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/me":
             self._serve_me()
+        elif self.path == "/widgets":
+            self._serve_widgets()
         elif self.path == "/events":
             self._serve_sse()
         elif self.path.startswith("/devices"):
@@ -893,6 +902,8 @@ class Handler(BaseHTTPRequestHandler):
             if self._check_browser_auth(): self._handle_add_device()
         elif self.path == "/delete_device":
             if self._check_browser_auth(): self._handle_delete_device()
+        elif self.path == "/set_widgets":
+            if self._check_browser_auth(): self._handle_set_widgets()
         elif self.path == "/confirm_gateway_deletions":
             self._handle_confirm_gateway_deletions()
         elif self.path == "/confirm_gateway_additions":
@@ -1222,6 +1233,43 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json_response(401, {"error": "Not authenticated"})
 
+    def _serve_widgets(self):
+        """Custom dashboard widgets, synced per Google account. Without
+        OAuth there's no durable per-user identity to key on, so the client
+        falls back to localStorage entirely — signalled via "serverSide"."""
+        session = getattr(self, "_session", None)
+        if not session:
+            self._json_response(200, {"serverSide": False, "widgets": []})
+            return
+        rows = _db_execute(
+            "SELECT widgets FROM widget_layouts WHERE user_key = %s",
+            (session["email"],), fetch=True,
+        )
+        widgets = rows[0][0] if rows else []
+        self._json_response(200, {"serverSide": True, "widgets": widgets})
+
+    def _handle_set_widgets(self):
+        session = getattr(self, "_session", None)
+        if not session:
+            self._json_response(200, {"ok": False, "serverSide": False})
+            return
+        try:
+            body = self._read_json()
+            widgets = body["widgets"]
+            if not isinstance(widgets, list):
+                raise ValueError("widgets must be a list")
+        except (json.JSONDecodeError, KeyError, ValueError) as exc:
+            self._json_response(400, {"ok": False, "error": str(exc)})
+            return
+        _db_execute(
+            """INSERT INTO widget_layouts (user_key, widgets)
+                   VALUES (%s, %s)
+               ON CONFLICT (user_key) DO UPDATE SET
+                   widgets=EXCLUDED.widgets, updated_at=now()""",
+            (session["email"], psycopg2.extras.Json(widgets)),
+        )
+        self._json_response(200, {"ok": True})
+
     def _read_json(self):
         length = int(self.headers.get("Content-Length", 0))
         return json.loads(self.rfile.read(length))
@@ -1535,16 +1583,26 @@ class Handler(BaseHTTPRequestHandler):
             event["value"] = val
             if decoded.get("extra"):
                 event["extra"] = decoded["extra"]
+            changed   = (val != ds.get("last_value"))
+            is_button = (dtype == device_classifier.BUTTON)
             ds["last_value"] = val
-            changed = (val != ds.get("last_value"))
-            if changed:
+            # Buttons only ever send a "pressed" uplink (no physical release
+            # payload), so a real state *change* only happens once and never
+            # again — count every press regardless, matching poller.py's
+            # DFRobot path. Non-button types keep the plain changed-only gate.
+            if changed or is_button:
                 with ds["stats_lock"]:
                     st = ds["stats"]
                     if st["server_start"] is None:
                         st["server_start"] = now
                     if val == 0:
                         st["opens"] += 1
-                    else:
+                        ev_extra = event.get("extra", {})
+                        if ev_extra.get("held"):
+                            st["holds"] += 1
+                        elif ev_extra.get("double"):
+                            st["doubles"] += 1
+                    elif changed:
                         st["closes"] += 1
                     st["last_change_ts"] = now
                     event["stats"] = dict(st)
