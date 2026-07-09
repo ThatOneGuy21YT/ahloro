@@ -850,6 +850,7 @@ MIME_TYPES = {
     ".ico":  "image/x-icon",
     ".css":  "text/css",
     ".js":   "application/javascript",
+    ".json": "application/json",
 }
 
 

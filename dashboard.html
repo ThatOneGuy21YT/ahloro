@@ -619,8 +619,10 @@
       .auth-profile-btn { padding: 3px 8px 3px 3px; gap: 6px; }
       .auth-logout-btn { width: 18px; height: 18px; }
 
-      /* Conn pill stays right on first row */
-      .conn-pill { margin-left: auto; }
+      /* Conn pill moves up to row 1, left of the Google sign-in button */
+      .app-bar-break { display: none; }
+      .conn-pill { order: 1; }
+      .auth-btn-wrap { order: 2; }
 
       /* Spacer collapses so the control row wraps below */
       .app-bar-spacer { display: none; }
